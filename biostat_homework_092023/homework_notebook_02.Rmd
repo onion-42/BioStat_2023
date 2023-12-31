@@ -1,0 +1,679 @@
+---
+title: "automatization_notebook_02"
+output: word_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warnings=FALSE, message=FALSE)
+
+library(tidyverse)
+
+```
+
+# Чтение данных
+
+В вашем варианте нужно использовать датасет food.
+
+```{r}
+data <- read_csv("data/raw/food.csv")
+glimpse(data)
+```
+
+# Выведите общее описание данных
+
+```{r}
+
+summary(data)
+
+```
+
+# Очистка данных
+
+1) Уберите переменные, в которых пропущенных значений больше 20% или уберите субъектов со слишком большим количеством пропущенных значений. Или совместите оба варианта. Напишите обоснование, почему вы выбрали тот или иной вариант:
+
+**Обоснование**: Мне повезло, и в датасете нет пропущенных данных. Также, судя по описательным статистикам и глимпсу, пока не похоже, чтобы наны были зашифрованы иначе. Но вообще я бы,  во-первых, подумала о цели анализа - нельзя удалять ключевые переменные, даже если там высокий процент пропущенных значений, бездумно. Я бы также посмотрела на распределение пропущенных значений: если пропущенные значения сконцентрированны в некоторых переменных, логично было бы взять первый подход, если в некоторых измерениях (строках) - второй, ну и третий подход был бы оптимальным, если и переменные, и субъекты имеют значительные проблемы с пропущенными значениями. 
+```{r}
+library(naniar)
+gg_miss_var(data) # график, показывающий долю пропущенных данных для каждой переменной
+vis_miss(data) # хитмап помогает увидеть, где именно в данных находятся пропуски
+
+```
+
+2) Переименуйте переменные в человекочитаемый вид (что делать с пробелами в названиях?);
+```{r}
+data <- data %>% 
+  rename_with(~ gsub("Data\\.", "", .x), everything()) %>%   # Удаление избыточного 'Data.' из названий
+  rename_with(~ gsub(" - ", "_", .x), everything()) %>%  # Замена ' - ' на '_'
+  rename_with(~ gsub(" ", "_", .x), everything())  # Замена пробела на '_'         
+
+names(data)
+```
+
+3) В соответствии с описанием данных приведите переменные к нужному типу (numeric или factor);
+
+```{r}
+#Большинство колонок это числовые данные, кроме "Category" и "Description". Помимо этого, есть "Nutrient_Data_Bank_Number" который явно не является числовым (в том смысле, что это идентификатор, который нельзя подвергнуть мат. операциям, например). 
+
+data <- data %>%
+  mutate(
+    Category = as.factor(Category),
+    Description = as.factor(Description),
+    Nutrient_Data_Bank_Number = as.factor(Nutrient_Data_Bank_Number)
+  )
+```
+
+```{r}
+# Визуализируем Category
+data %>%
+  count(Category) %>% 
+  arrange(desc(n)) %>% 
+  ggplot(aes(x = reorder(Category, n), y = n)) + 
+  geom_col() +   coord_flip() +
+  labs(title = "Распределение категорий", x = "Категория", y = "Частота") +
+  theme_classic()
+```
+```{r}
+# Так как категорий слишком много, давайте посмотрим на топ-20
+data %>%
+  count(Category) %>% 
+  arrange(desc(n)) %>% 
+  top_n(20) %>%
+  ggplot(aes(x = reorder(Category, n), y = n)) + 
+  geom_col() +   coord_flip() +
+  labs(title = "Распределение категорий", x = "Категория", y = "Частота") +
+  theme_classic()
+```
+```{r}
+# Описаний наверняка не меньше, чем категорий, так что тоже посмотрим на топ
+data %>%
+  count(Description) %>% 
+  arrange(desc(n)) %>% 
+  top_n(20) %>%
+  ggplot(aes(x = reorder(Description, n), y = n)) + 
+  geom_col() +   coord_flip() +
+  labs(title = "Распределение описаний", x = "Описание", y = "Частота") +
+  theme_classic()
+```
+```{r}
+# Судя по всему, в колонке Description все значения уникальны, поэтому давайте посмотрим, верно ли это и для каких колонок, чтобы далее не делать такие ужасные графики
+unique_cases <- sapply(names(data), function(column_name) {
+  column <- data[[column_name]]
+  if (length(unique(column)) == nrow(data)) {
+    return(column_name)  # пишем имя столбца, если все значения уникальны
+  } else {
+    return(NA) # в ином случае нан
+  }
+})
+
+unique_cases <- unique_cases[!is.na(unique_cases)]
+print(unique_cases) # Видим, что и в случае Description, и в случае Nutrient_Data_Bank_Number все значения уникальны, т.е. из банка нутриентов скорее всего взяли 7083 уникальных значений без дублей и затем их сгруппировали (либо они были уже сгруппированы оригинально)
+```
+
+4) Отсортируйте данные по углеводам по убыванию;
+
+```{r}
+# Углеводы это судя по всему колонка Carbohydrate
+data <- data %>% 
+  arrange(desc(Carbohydrate))
+head(data)
+```
+
+5) Сохраните в файл outliers.csv субъектов, которые являются выбросами (например, по правилу трёх сигм) — это необязательное задание со звёздочкой;
+```{r}
+# Так как у меня преимущественно числовые данные, мне кажется, было бы уместно использовать PCA для визуализации и отсечения аутлаеров. 
+# Давайте посмотрим на проценты объясненной дисперсии
+
+numeric_data <- data %>% select_if(is.numeric)
+pca_result <- prcomp(numeric_data, center = TRUE, scale. = TRUE)
+
+summary(pca_result)
+
+var_explained = (pca_result$sdev^2 / sum(pca_result$sdev^2))*100
+
+x_values <- 1:length(var_explained)
+
+ggplot(data = data.frame(PC = x_values, Var = var_explained), aes(x = PC, y = Var)) + 
+  geom_line() + 
+  geom_point() + 
+  xlab("Главные компоненты") + 
+  ylab("Объясненная дисперсия, %") +
+  ggtitle("График локтя для данных") +
+  ylim(0, 30)+
+  theme_classic() 
+#Видим, что PCA достаточно плохо описывает данные, в первых двух компонентах всего 30% объясненной дисперсии, а 75% достигаются лишь на 11 компоненте. Но давайте построим скаттерплот по ним и посмотрим как распределяются образцы в этих координатах
+```
+```{r}
+PC1 <- pca_result$x[,1]
+PC2 <- pca_result$x[,2]
+ggplot(data = data, 
+       aes(x = PC1, 
+           y = PC2)) +
+  geom_point()+ 
+  xlab("PC1 (19.8%)") + 
+  ylab("PC2 (10.3%)")+
+  ggtitle("Продукты в пространстве нутриентов")+
+  theme_classic() 
+#Давайте попробуем лог-шкалировать данные, т.к. мы видели очень насыщенные нулями переменные с длинными хвостами (очень высокими max значениями), может быть это поможет с PCA
+```
+```{r}
+numeric_data <- data %>% select_if(is.numeric)
+numeric_data <- log1p(numeric_data) #лог-шкалируем, убирая 0 чтобы избежать отрицательных значений
+pca_result <- prcomp(numeric_data, center = TRUE, scale. = TRUE)
+
+summary(pca_result)
+
+var_explained = (pca_result$sdev^2 / sum(pca_result$sdev^2))*100
+
+x_values <- 1:length(var_explained)
+
+ggplot(data = data.frame(PC = x_values, Var = var_explained), aes(x = PC, y = Var)) + 
+  geom_line() + 
+  geom_point() + 
+  xlab("Главные компоненты") + 
+  ylab("Объясненная дисперсия, %") +
+  ggtitle("График локтя для лог-шаклированных данных") +
+  ylim(0, 30)+
+  theme_classic() 
+
+#Это действительно помогло, теперь первые 2 компоненты объясняют больше дисперсии, а 75% достигается на 9-й компоненте. Это все еще мало, но, думаю, может подойти для отсечения аутлаеров. Давайте также визуализируем скаттер по PC2 и 1.
+```
+```{r}
+PC1 <- pca_result$x[,1]
+PC2 <- pca_result$x[,2]
+ggplot(data = data, 
+       aes(x = PC1, 
+           y = PC2)) +
+  geom_point()+ 
+  xlab("PC1 (29%)") + 
+  ylab("PC2 (12.1%)")+
+  ggtitle("Продукты в пространстве нутриентов, лог-шкалированные")+
+  theme_classic()
+#Видим, что аутлаеров явно стало меньше и нам стало лучше видно "облако". Давайте попробуем итеративный PCA, будем брать первые 2 компоненты, вычленять продукты с median deviation больше 4.5 (подобранная отсечка, т.к. стандартная 6 не включала некоторых явных аутлаеров), пока таких измерений не станет. Все это будем делать в лог-шкалированном пространстве. На мой взгляд все способы определения аутлаеров субъективны, и этот способ нравится мне, хотя некоторым может показать экзотичным, поскольку мне кажется, что выбросы, определяемые таким способом, действительно выбросы(в отличие от isolation forest или некоторых стат тестов); и мне нравится, что не нужно отдавать приоритет каким-либо переменным, за меня это делает PCA (как в случае с отсечением по квантилям, например)
+```
+```{r}
+library(stats)
+
+numeric_data <- data %>% select_if(is.numeric)
+numeric_data <- log1p(numeric_data)
+df <- as.matrix(numeric_data)
+original_row_count <- nrow(df)
+
+outliers_mask <- rep(FALSE, original_row_count)
+
+while(TRUE) {
+  pca_result <- prcomp(df, center = TRUE, scale. = TRUE)
+  transformed_data <- pca_result$x[, 1:2]
+
+  medians <- apply(transformed_data, 2, median)
+  mads <- apply(transformed_data, 2, mad)
+
+  scores <- abs((transformed_data - medians) / mads)
+  outliers_idx <- apply(scores, 1, function(x) any(x > 4.5))
+
+  if(any(outliers_idx)) {
+    outliers_mask[which(outliers_mask == FALSE)] <- outliers_idx
+    df <- df[!outliers_idx, ]
+  } else {
+    break
+  }
+}
+
+outliers_counts <- table(outliers_mask)
+
+print(outliers_counts) #Аутлаеров получилось 23, давайте визуализируем их и сохраним
+
+```
+```{r}
+pca_result <- prcomp(numeric_data, center = TRUE, scale. = TRUE)
+
+pca_data <- data.frame(PC1 = pca_result$x[, 1], PC2 = pca_result$x[, 2], Outlier = outliers_mask)
+
+ggplot(pca_data, aes(x = PC1, y = PC2, color = Outlier)) +
+  geom_point() +
+  xlab("PC1 (29%)") + 
+  ylab("PC2 (12.1%)") +
+  ggtitle("Продукты в пространстве нутриентов, лог-шкалированные") +
+  theme_classic() +
+  scale_color_manual(values = c("black", "red")) # Аутлаеры красим красным
+#Видим выбросы, особенно в левом углу -- достаточно очевидные
+```
+```{r}
+ggplot(pca_data[!pca_data$Outlier, ], aes(x = PC1, y = PC2)) +
+  geom_point() +
+  xlab("PC1 (29%)") + 
+  ylab("PC2 (12.1%)") +
+  ggtitle("Продукты в пространстве нутриентов без аутлаеров, лог-шкалированные") +
+  theme_classic()
+# График без аутлаеров выглядит действительно гораздо лучше, хотя явно облако группируется на некие батчи, разбираться глубже не буду, но было бы интересно, возможно, жиры, углеводы и белки могут группироваться в разных частях пространства.
+```
+```{r}
+outliers_data <- data[outliers_mask, ]
+write.csv(outliers_data, "data/output/outliers.csv", row.names = FALSE)
+# Видим, что в аутлаеры вошла вода, соки, бычья печень, хлопья и бары -- для некоторых не очень понятно, почему
+```
+
+6) Отфильтруйте датасет так, чтобы остались только Rice и Cookie (переменная Category и есть группирующая);
+
+7) Присвойте получившийся датасет переменной "cleaned_data".
+
+```{r}
+cleaned_data <- data %>% 
+  filter(Category %in% c("Rice", "Cookie"))
+head(cleaned_data)
+
+```
+
+# Сколько осталось переменных?
+
+```{r}
+#Кол-во колонок не поменялось, как, мне кажется, и должно быть. Их было и осталось 38
+num_variables_old <- ncol(data)
+num_variables_new <- ncol(cleaned_data)
+print(num_variables_old)
+print(num_variables_new)
+```
+
+# Сколько осталось случаев?
+
+```{r}
+#Кол-во строк сильно уменьшилось, как мы бы и ожидали. Было 7083, стало 243.
+num_rows_old <- nrow(data)
+num_rows_new <- nrow(cleaned_data)
+print(num_rows_old)
+print(num_rows_new)
+```
+
+# Есть ли в данных идентичные строки?
+
+```{r}
+#Видим, что дублей нет
+duplicates_old <- any(duplicated(data))
+duplicates_new <- any(duplicated(cleaned_data))
+
+print(duplicates_old)
+print(duplicates_new)
+```
+
+# Сколько всего переменных с пропущенными значениями в данных и сколько пропущенных точек в каждой такой переменной?
+
+```{r}
+# С помощью naniar выше выяснили, что пропусков, слава богам, нет.
+```
+
+# Описательные статистики
+
+## Количественные переменные
+
+1) Рассчитайте для всех количественных переменных для каждой группы (Category):
+
+1.1) Количество значений;
+
+1.2) Количество пропущенных значений;
+
+1.3) Среднее;
+
+1.4) Медиану;
+
+1.5) Стандартное отклонение;
+
+1.6) 25% квантиль и 75% квантиль;
+
+1.7) Интерквартильный размах;
+
+1.8) Минимум;
+
+1.9) Максимум;
+
+1.10) 95% ДИ для среднего - задание со звёздочкой.
+
+```{r}
+# Для cleaned дата все считается хорошо, а для всех категори для SD и CI есть пропуски, из-за того что, видимо, SD выходит корнем из 0 в группе из 1 сэмпла (среднее и есть этот сэмпл). Думаю, т.к. мы получили cleaned data, преполагается, что работаем дальше с ним, что и буду делать, но на всякий оставлю вычисления и для data
+descriptive_numeric_stats <- cleaned_data %>% 
+  group_by(Category) %>% 
+  summarise(across(where(is.numeric), list(
+    count = ~sum(!is.na(.)),
+    missing = ~sum(is.na(.)),
+    mean = ~mean(., na.rm = TRUE),
+    median = ~median(., na.rm = TRUE),
+    sd = ~if (sum(!is.na(.)) > 1) sd(., na.rm = TRUE) else NA_real_,
+    quantile_25 = ~quantile(., 0.25, na.rm = TRUE),
+    quantile_75 = ~quantile(., 0.75, na.rm = TRUE),
+    IQR = ~IQR(., na.rm = TRUE),
+    min = ~min(., na.rm = TRUE),
+    max = ~max(., na.rm = TRUE),
+    CI95_lower = ~if (sum(!is.na(.)) > 1) mean(., na.rm = TRUE) - 1.96 * (sd(., na.rm = TRUE) / sqrt(sum(!is.na(.)))) else NA_real_,
+    CI95_upper = ~if (sum(!is.na(.)) > 1) mean(., na.rm = TRUE) + 1.96 * (sd(., na.rm = TRUE) / sqrt(sum(!is.na(.)))) else NA_real_
+  )))
+
+
+print(descriptive_numeric_stats)
+
+```
+```{r}
+# Для whole data
+
+descriptive_numeric_stats_whole <- data %>% 
+  group_by(Category) %>% 
+  summarise(across(where(is.numeric), list(
+    count = ~sum(!is.na(.)),
+    missing = ~sum(is.na(.)),
+    mean = ~mean(., na.rm = TRUE),
+    median = ~median(., na.rm = TRUE),
+    sd = ~if (sum(!is.na(.)) > 1) sd(., na.rm = TRUE) else NA_real_,
+    quantile_25 = ~quantile(., 0.25, na.rm = TRUE),
+    quantile_75 = ~quantile(., 0.75, na.rm = TRUE),
+    IQR = ~IQR(., na.rm = TRUE),
+    min = ~min(., na.rm = TRUE),
+    max = ~max(., na.rm = TRUE),
+    CI95_lower = ~if (sum(!is.na(.)) > 1) mean(., na.rm = TRUE) - 1.96 * (sd(., na.rm = TRUE) / sqrt(sum(!is.na(.)))) else NA_real_,
+    CI95_upper = ~if (sum(!is.na(.)) > 1) mean(., na.rm = TRUE) + 1.96 * (sd(., na.rm = TRUE) / sqrt(sum(!is.na(.)))) else NA_real_
+  )))
+
+
+print(descriptive_numeric_stats_whole)
+```
+
+
+## Категориальные переменные
+
+1) Рассчитайте для всех категориальных переменных для каждой группы (Category):
+
+1.1) Абсолютное количество;
+
+1.2) Относительное количество внутри группы;
+
+1.3) 95% ДИ для доли внутри группы - задание со звёздочкой.
+
+```{r}
+
+categorical_data <- cleaned_data %>% 
+  select(where(~is.factor(.) | is.character(.)))
+
+categorical_stats <- categorical_data %>% 
+  pivot_longer(cols = c('Description','Nutrient_Data_Bank_Number'), names_to = "variable", values_to = "value") %>%
+  group_by(Category, variable, value) %>%
+  summarise(
+    count = n(), 
+    proportion = n() / sum(n()), 
+    .groups = 'drop'
+  ) %>%
+  group_by(Category, variable) %>%
+  mutate(
+    CI95_lower = ifelse(proportion > 0, proportion - 1.96 * sqrt(proportion * (1 - proportion) / sum(count)), 0),
+    CI95_upper = ifelse(proportion > 0, proportion + 1.96 * sqrt(proportion * (1 - proportion) / sum(count)), 0)# Не уверена, правильно ли считаю тут ДИ
+  )
+
+# Мы уже знаем, что все переменные в категориях кроме нашей группирующей уникальные, но вроде бы код работает, правда проверить это сложно. ДИ скорее всего посчитаны неправильно, т.к. они должны быть равны 0 (их просто должно быть нельзя рассчитать)
+# Не буду делать то же для полного датафрейма, т.к. результат понятен
+print(categorical_stats)
+
+
+```
+
+# Визуализация
+
+## Количественные переменные
+
+
+1) Для каждой количественной переменой сделайте боксплоты по группам. Расположите их либо на отдельных рисунках, либо на одном, но читаемо;
+
+2) Наложите на боксплоты beeplots - задание со звёздочкой.
+
+3) Раскрасьте боксплоты с помощью библиотеки RColorBrewer.
+
+```{r}
+
+#Думаю, здесь точно нужно использовать cleaned_data, т.к. иначе категорий будет слишком много
+
+library(RColorBrewer)
+library(ggbeeswarm)
+
+numeric_data <- cleaned_data %>% select(where(is.numeric))
+numeric_vars <- names(numeric_data)
+
+for (var in numeric_vars) {
+  plot <- ggplot(cleaned_data, aes_string(x = 'Category', y = var, fill = 'Category')) +
+    geom_boxplot() +
+    geom_beeswarm(aes(color = Category), size = 1.5, alpha = 0.7) +
+    scale_fill_brewer(palette = "Set1") +
+    scale_color_brewer(palette = "Set1") +
+    theme_classic() +
+    ggtitle(paste(var, "по группам")) +
+    theme(legend.position = "none")
+  
+  print(plot)
+}
+
+```
+
+## Категориальные переменные
+
+1) Сделайте подходящие визуализации категориальных переменных. Обоснуйте, почему выбрали именно этот тип.
+
+```{r}
+# Давайте используем столбчатую диаграмму. Она подходит для сравнения групп лучше, чем, например, пай чарт, поскольку в последнем сложно бывает сравнивать площади. Кроме того, в двух группах у нас сплошь уникальные значения, которые будут красиво переливаться.
+
+categorical_vars <- names(cleaned_data)[sapply(cleaned_data, is.factor)]
+for (var in categorical_vars) {
+  plot <- ggplot(cleaned_data, aes_string(x = var, fill = var)) +
+    geom_bar() +
+    theme_classic() +
+    ggtitle(var) +
+    theme(legend.position = "none")
+  
+  print(plot)
+}
+```
+
+
+# Статистические оценки
+
+## Проверка на нормальность
+
+1) Оцените каждую переменную на соответствие нормальному распределению с помощью теста Шапиро-Уилка. Какие из переменных являются нормальными и как как вы это поняли?
+
+```{r}
+shapiro_test_results <- lapply(numeric_data, function(x) {shapiro.test(x)})
+
+normality_test_results <- sapply(shapiro_test_results, function(result) {result$p.value >= 0.05})
+print(table(normality_test_results))
+
+# Все переменные не являются нормальными по этому тесту (p теста больше 0.05). Этот тест очень чувствителен к малейшим отклонениям от нормальности, поэтому например qq плот может быть лучше для оценки нормальности.
+
+```
+
+
+2) Постройте для каждой количественной переменной QQ-плот. Отличаются ли выводы от теста Шапиро-Уилка? Какой метод вы бы предпочли и почему?
+
+```{r}
+par(mar = c(2, 2, 2, 2))
+par(mfrow = c(4, 4))
+for (var in numeric_vars) {
+  qqnorm(numeric_data[[var]], main = paste(var, "QQ"))
+  qqline(numeric_data[[var]])
+}
+
+# Выводы отличаются, как минимум для переменных Sodium и Zinс даже для нешкалированных данных распределение явно близко к нормальному, что не отметил тест. Я бы предпочла QQ плоты, поскольку при работе с реальными данными шум это достаточно стандартная вещь, но тесты слишком чувствительны, а на итоговых оценках такие отклонения от нормальности (особенно после того, как мы уберем выбросы) не　должны　сильно сказаться
+```
+
+3) Ниже напишите, какие ещё методы проверки на нормальность вы знаете и какие у них есть ограничения.
+
+Знаю тест Колмогорова-Cмирнова, который сравнивает эмпирическое распределение данных с теоретическим нормальным распределением. Он также очень чувствителен, особенно к выбросам в центральной части распределения, и в этом его недостаток. 
+Также можно использовать другие визуальные методы, например kdeplot (он строит гистограмму, делая ее похожей на график плотности вероятности), что может дать представление о распределении, но это очень субъективный метод без определенных критериев и в этом его большое ограничение.
+
+## Сравнение групп
+
+1) Сравните группы (переменная **Category**) по каждой переменной (как количественной, так и категориальной). Для каждой переменной выберите нужный критерий и кратко обоснуйте его выбор в комментариях.
+
+```{r}
+# 1) Я применю t-test для переменных "Major_Minerals.Magnesium", "Major_Minerals.Phosphorus", "Major_Minerals.Sodium", "Major_Minerals.Zinc", "Fiber", "Niacin", "Thiamin" после отсечения 0.1 и 0.9 перцентилей, поскольку они прошли "проверку" на нормальность по QQ плотам
+
+# 2) Для остальных численных переменных я применю mann whitney u test, непараметрический аналог t test-а, поскольку для них распределение не нормальное
+
+# 3) Для категориальных данных я бы применила хи-квадрат, но все переменные уникальны, поэтому пересечений не будет, и я не буду проводить эти сравнения, посколько в итоге все равно мы не получим результата
+
+t_test_vars <- c("Major_Minerals.Magnesium", "Major_Minerals.Phosphorus", "Major_Minerals.Sodium", "Major_Minerals.Zinc", "Fiber", "Niacin", "Thiamin")
+mann_whitney_vars <- setdiff(names(numeric_data), t_test_vars)
+
+test_results <- data.frame()
+
+# t-тест
+for (var in t_test_vars) {
+  data_for_test <- cleaned_data %>%
+    filter(between(!!sym(var), quantile(!!sym(var), 0.1, na.rm = TRUE), quantile(!!sym(var), 0.9, na.rm = TRUE))) %>%
+    select(Category, !!sym(var))
+  
+  test_result <- broom::tidy(t.test(reformulate("Category", response = var), data = data_for_test))
+  test_result <- test_result %>% select(p.value) %>% mutate(variable = var, test = "t-test")
+  test_results <- rbind(test_results, test_result)
+}
+
+# Манн-Уитни
+for (var in mann_whitney_vars) {
+  data_for_test <- cleaned_data %>%
+    select(Category, !!sym(var))
+  
+  test_result <- broom::tidy(wilcox.test(reformulate("Category", response = var), data = data_for_test))
+  test_result <- test_result %>% select(p.value) %>% mutate(variable = var, test = "Mann-Whitney U")
+  test_results <- rbind(test_results, test_result)
+}
+
+# Попробуем применить FDR, хотя у нас 2 разных теста, но идеологически эта поправка нам подходит: мы хотим найти интересные результаты, а сет сравнений у нас в целом, один и тот же, хоть и с разными тестами (это все равно немного некорректно, лучше было бы использовать на все сравнения Манн-Уитни, возможно)
+test_results$p.adj <- p.adjust(test_results$p.value, method = "fdr")
+
+test_results <- test_results %>% 
+  arrange(p.adj)
+
+print(test_results)
+
+# Видим, что рис и печеньки отличаются практически по всему, что, наверное, достаточно ожидаемо. Визуально по боксплотам это также было так.
+
+```
+
+# Далее идут **необязательные** дополнительные задания, которые могут принести вам дополнительные баллы в том числе в случае ошибок в предыдущих
+
+## Корреляционный анализ
+
+1) Создайте корреляционную матрицу с визуализацией и поправкой на множественные сравнения. Объясните, когда лучше использовать корреляционные матрицы и в чём минусы и плюсы корреляционных исследований.
+
+```{r}
+
+# Буду использовать Спирмана, поскольку он непараметрический, а по распределениям мы уже более менее выяснили
+# В качестве поправки возьму FDR, поскольку мы все еще хотим найти интересные взаимодействия в куче сравнений
+# Когда использовать коррелограммы? Когда нам необходимо выявить потенциально очень похожие признаки, когда необходимо выявить источник мультиколлинеарности, чтобы выявить выбросы, чтобы лучше понять структуру данных
+# Плюсы: они интуитивно понятны и помогают быстро идентифицировать взаимосвязи между переменными
+# Минусы: корреляцию часто путают с причинно-следственной связью, что делать нельзя. Направления у корреляции нет, и взаимосвязь не может никак быть объяснена с помощью лишь коррелограммы. 
+
+library(Hmisc)
+library(reshape2)
+
+cor_results <- rcorr(as.matrix(numeric_data), type = "spearman")
+cor_matrix <- cor_results$r
+p_matrix <- cor_results$P
+p_matrix_adj <- apply(p_matrix, c(1, 2), function(x) p.adjust(x, method = "fdr"))
+mask <- p_matrix_adj > 0.05
+
+data_for_plot <- melt(cor_matrix)
+names(data_for_plot) <- c("Variable1", "Variable2", "Correlation")
+data_for_plot$Significance <- p_matrix_adj[cbind(match(data_for_plot$Variable1, rownames(p_matrix_adj)), match(data_for_plot$Variable2, colnames(p_matrix_adj)))] <= 0.05
+
+ggplot(data_for_plot, aes(x = Variable1, y = Variable2, fill = Correlation)) +
+  geom_tile(aes(alpha = Significance)) +
+  scale_fill_viridis_c() +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+## Моделирование
+
+1) Постройте регрессионную модель для переменной **Category**. Опишите процесс построения
+
+```{r}
+#Для начала прошкалируем данные и уберем неинформативные переменные и мультиколлинеарность. Категориальные данные неинформативны, мы их удалим. Кроме того, несколько переменных, не отличающиеся по сравнениям, мы тоже удалим (p.adj>0.05)
+# Переменную ответа преобразуем в 0 для категории "Rice" и 1 для "Cookies". 
+# Коррелограмма показывает, что жиры и каротины очень хорошо коррелируют между собой, я оставлю Fat.Total_Lipid и "жирного" кластера и Beta_Carotene из каротинов. Также вода очень антикоррелирует с кластером жиров, но пока оставлю ее, посчитаю  VIF и если он будет высоким, попробую удалить ее также.  
+# Все численные переменные сначала лог-шкалирую, уберу найденных аутлаеров, а затем перенесу в область от 0 до 1 для лучшей работы регрессии. 
+# Затем посчитаю VIF, отсечкой будет стандартно 10. Буду использовать lm, не лог-регрессию, посколько VIF не зависит от таргетной переменной, а с glm могут быть достаточно странные числа
+library(car)
+library(scales)
+
+insignificant_vars <- test_results %>%
+  filter(p.value > 0.05) %>%
+  pull(variable)
+
+model_df <- data %>% filter(!outliers_mask)%>%
+  filter(Category %in% c("Rice", "Cookie")) %>%
+  mutate(Category = ifelse(Category == "Rice", 0, 1))%>%
+  select(-all_of(insignificant_vars))%>%
+  select(-c(Fat.Saturated_Fat, Fat.Polysaturated_Fat, Fat.Monosaturated_Fat, Alpha_Carotene, Description,Nutrient_Data_Bank_Number)) %>%
+  mutate(across(where(is.numeric), ~rescale(log1p(.))))
+
+print(head(model_df))
+
+model_for_vif <- lm(Category ~ ., data = model_df)
+vif_results <- vif(model_for_vif)
+print(sort(vif_results, decreasing = TRUE))
+
+# Видим, что Carbohydrate, Beta_Carotene, Water,  Vitamins.Vitamin_A_RAE, Sugar_Total  и Riboflavin имеют очень высокий VIF. Я не заметила высокую корреляцию Riboflavin с жирами, а также витамина С c A с каротинами. Попробуем удалить воду и Beta_Carotene
+```
+```{r}
+model_df <- model_df%>%
+  select(-c(Water, Beta_Carotene))
+
+model_for_vif <- lm(Category ~ ., data = model_df)
+vif_results <- vif(model_for_vif)
+print(sort(vif_results, decreasing = TRUE))
+
+# Снизили виф для витамина A, но не для сахаров и рибофлавина. Удалим рибофлавин и Sugar_Total
+```
+```{r}
+model_df <- model_df%>%
+  select(-c(Sugar_Total, Riboflavin))
+
+model_for_vif <- lm(Category ~ ., data = model_df)
+vif_results <- vif(model_for_vif)
+print(sort(vif_results, decreasing = TRUE))
+
+# Отлично, теперь мы готовы к регрессии. Сделаем сплит, построим логрегрессию и посчитаем метрики.
+```
+```{r}
+library(caret)
+library(pROC)
+set.seed(42)
+model_df$Category = as.factor(model_df$Category)
+split <- createDataPartition(model_df$Category, p = 0.6, list = FALSE)
+train_data <- model_df[split, ]
+test_data <- model_df[-split, ]
+
+model <- glm(Category ~ ., data = train_data, family = binomial(link = "logit"))
+
+predictions <- predict(model, test_data, type = "response")
+
+roc_curve <- roc(test_data$Category, predictions)
+auc_value <- auc(roc_curve)
+plot(roc_curve, main = "ROC Curve")
+legend("bottomright", paste("AUC =", round(auc_value, 2)))
+
+print(roc_curve)
+
+#Идеальная разбивка для риса и печенек. Warning появляется из-за того, что предиктор идеально разделяет группы
+
+```
+```{r}
+control <- trainControl(method = "cv", number = 10)
+cv_model <- train(Category ~ ., data = model_df, method = "glm", family = "binomial", trControl = control)
+print(cv_model)
+
+#То же можно сказать для кросс-валидации
+```
+
+
+
+
+
+
+
+
