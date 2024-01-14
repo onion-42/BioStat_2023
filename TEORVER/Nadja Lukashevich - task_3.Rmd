@@ -1,0 +1,349 @@
+---
+title: "Task 4"
+author: "Evgeny Bakin"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE)
+
+library(tidyverse)
+library(broom)
+set.seed(2024)
+```
+
+# Сравнение вероятностей наступления события в двухгрупповом исследовании
+
+## 1. Модель пациента
+
+```{r model}
+
+p_R <- 0.1 # Истинная вероятность выздоровления для референса (в ГЕНЕРАЛЬНОЙ СОВОКУПНОСТИ)
+
+p_T <- 0.2 # Истинная вероятность выздоровления для теста (в ГЕНЕРАЛЬНОЙ СОВОКУПНОСТИ)
+
+true_OR <- (p_T/(1-p_T))/(p_R/(1-p_R)) # Истинное отношение шансов
+
+```
+## 2. Генерация однократной выборки
+
+```{r one_sample}
+
+sample_size <- 100 # Количество пациентов в каждой из групп
+
+df_trial <- data.frame(
+  arm = rep(c('R', 'T'), each = sample_size),
+  patient_ID = rep(1:sample_size, 2),
+  recovery_status = c(sample(c(1,0), sample_size, replace = TRUE, prob = c(p_R, 1 - p_R)),
+                      sample(c(1,0), sample_size, replace = TRUE, prob = c(p_T, 1 - p_T)))
+)
+
+```
+## 3. Построение ДИ для разницы вероятностей
+
+```{r diff}
+
+df_prop <- df_trial %>% 
+  group_by(arm) %>% # Группировка типу интервенции (тест/референс)
+  dplyr::summarise(x = sum(recovery_status), # Подсчет числа положительных исходов (единиц)
+                   n = n()) %>% # Подсчет общего числа пациентов в группе
+  ungroup() %>% 
+  dplyr::summarise(X = list(x), N = list(n)) %>% # Соединение все x и n в отдельные вектора
+  rowwise() %>% 
+  mutate(tst = list(broom::tidy(prop.test(X, N)))) %>% # Вычисление ДИ на разницу пропорций
+  unnest(tst) %>% # Раскладка результатов prop.test по столбцам 
+  mutate(catch = ifelse(conf.low < p_R-p_T & p_R-p_T < conf.high, "Catch", "Miss"))
+  
+print(df_prop)
+
+```
+
+## ЗАДАНИЕ №1
+
+- Повторить этот эксперимент 1000 раз, каждый раз фиксируя факт накрытия истинной разницы в вероятностях (p_R-p_T). 
+- Оценить полученную вероятность накрытия с заданной по умолчанию (0.95).
+- Построить гистограмму точечной оценки разницы вероятностей (estimate1-estimate2) и подумать о ее распределении.
+
+```{r 1000_sims}
+n_sims <- 1000
+
+coverage_count <- 0
+estimates_diff <- numeric(n_sims)
+
+for (i in 1:n_sims) {
+  set.seed(i)
+  df_trial <- data.frame(
+    arm = rep(c('R', 'T'), each = sample_size),
+    patient_ID = rep(1:sample_size, 2),
+    recovery_status = c(sample(c(1,0), sample_size, replace = TRUE, prob = c(p_R, 1 - p_R)),
+                        sample(c(1,0), sample_size, replace = TRUE, prob = c(p_T, 1 - p_T)))
+  )
+
+
+  df_prop <- df_trial %>% 
+    group_by(arm) %>% # Группировка типу интервенции (тест/референс)
+    dplyr::summarise(x = sum(recovery_status), # Подсчет числа положительных исходов (единиц)
+                     n = n()) %>% # Подсчет общего числа пациентов в группе
+    ungroup() %>% 
+    dplyr::summarise(X = list(x), N = list(n)) %>% # Соединение все x и n в отдельные вектора
+    rowwise() %>% 
+    mutate(tst = list(broom::tidy(prop.test(X, N)))) %>% # Вычисление ДИ на разницу пропорций
+    unnest(tst) %>% # Раскладка результатов prop.test по столбцам 
+    mutate(catch = ifelse(conf.low < p_R-p_T & p_R-p_T < conf.high, "Catch", "Miss"))
+
+  # Попадает ли истинная разница в интервал?
+  catch <- any(df_prop$catch == "Catch")
+  coverage_count <- coverage_count + catch
+  diff_estimate <- df_prop$estimate1 - df_prop$estimate2
+  estimates_diff[i] <- diff_estimate
+}
+
+# Вероятность накрытия
+coverage_prob <- coverage_count / n_sims
+
+# Гистограмма
+ggplot(data.frame(estimates_diff), aes(x = estimates_diff)) +
+  geom_histogram() +
+  labs(title = "Распределение оценки (p_R-p_T)", x = "Разница в вероятностях p_R-p_T", y = "Частота")+ geom_vline(xintercept = p_R-p_T,color = "red", size=1.5)+theme_classic()
+
+print(paste("Вероятность накрытия:", coverage_prob))
+
+```
+
+Выводы: вероятность накрытия выше заданной по умолчанию (0.95), т.е. истинная разница чаще оказывается в интервале, чем мы бы ожидали. Это делает оценку консервативной, это может быть хорошо (если мы хотим уменьшить риск ошибочных выводов), но может быть и плохо (т.к. такой интервал чуть менее информативен), и возможно это может измениться в зависимости от заданных параметров. 
+Что касается гистограммы, мода находится в отрицательном диапазоне, что мы бы ожидали, зная реальную разницу (-0.1). Конкретно с этими сидами есть высокий пик, но когда я крутила эксперименты без сида, он мог появляться или нет, так что думаю, это какая-то флуктуация. Само распределение похоже на нормальное, оно симметричое относительно центра и у него не очень широкие концы, что для нас хорошо.
+
+
+- Проверить, корректно ли работает методика построения ДИ, реализованная в prop.test, при различных значениях p_R и p_T.
+
+```{r}
+set.seed(2024)
+p_R_range <- seq(0.01, 0.99, by = 0.05)
+p_T_range <- seq(0.01, 0.99, by = 0.05)
+
+coverage_results <- data.frame(p_R = numeric(), p_T = numeric(), coverage_prob = numeric())
+
+for (p_R in p_R_range) {
+  for (p_T in p_T_range) {
+    coverage_count <- 0
+    for (i in 1:n_sims) {
+      # с датафреймами считалось слишком долго, так что попыталась переписать
+      recovery_R <- sample(c(1, 0), sample_size, replace = TRUE, prob = c(p_R, 1 - p_R))
+      recovery_T <- sample(c(1, 0), sample_size, replace = TRUE, prob = c(p_T, 1 - p_T))
+      x <- c(sum(recovery_R), sum(recovery_T))
+      n <- c(sample_size, sample_size)
+      test_result <- prop.test(x, n)
+      conf.int <- test_result$conf.int
+      if (conf.int[1] < p_R - p_T && p_R - p_T < conf.int[2]) {
+        coverage_count <- coverage_count + 1
+      }
+    }
+
+    coverage_prob <- coverage_count / n_sims
+    coverage_results <- rbind(coverage_results, data.frame(p_R = p_R, p_T = p_T, coverage_prob = coverage_prob))
+  }
+}
+
+ggplot(coverage_results, aes(x = p_R, y = coverage_prob)) +
+  geom_point() +
+  geom_line(aes(group = p_T, color = as.factor(p_T))) +
+  labs(title = "Зависимость вероятности накрытия от p_R", x = "p_R", y = "Вероятность накрытия", color = "p_T") +
+  theme_classic()
+
+
+```
+Вывод: 0.95 это редкое значение при разных p_R и p_T. В случае значения 0.01 для p_T и p_R функция сильно ошибается и вероятность накрытия становится сильно меньше ожидаемой (в районе 88%). Иногда оценка чуть меньше 0.95, но это скорее исключение, в основном оценки консервативные. эта визуализация не очень наглядная, поэтому попробую побиннить оценки и возможно выводы изменятся.
+
+```{r}
+coverage_results$bins <- cut(coverage_results$p_R, breaks = seq(0, 1, by = 0.05))
+coverage_summary <- coverage_results %>%
+  group_by(bins) %>%
+  summarise(
+    mean = mean(coverage_prob),
+    sd = sd(coverage_prob),
+    se = sd / sqrt(n()),
+    ci_lower = mean - qt(0.975, df = n() - 1) * se,
+    ci_upper = mean + qt(0.975, df = n() - 1) * se
+  ) %>%
+  mutate(bins_mid = as.numeric(gsub(".*\\((.+)\\,.+", "\\1", bins)) + 0.01 / 2)
+
+ggplot(coverage_results, aes(x = p_R)) +
+  geom_errorbar(data = coverage_summary, aes(x = bins_mid, ymin = ci_lower, ymax = ci_upper), width = 0.01, color = 'red') +
+  geom_point(data = coverage_summary, aes(x = bins_mid, y = mean), color = 'black', size = 3) +
+  labs(title = 'Оценки с ДИ для p_R', x = 'p_R', y = 'Вероятность накрытия')+theme_classic()
+
+```
+Если мы усредняем оценки по бинам, то видим, что почти все время (за исключением первого, за счет выброс на 0.1/0.1) оценка не доходит до 0.95, но какой-то очевидной зависимости от значений p_R я не наблюдаю, если она есть, то она по крайней мере точно не линейная.
+```{r}
+coverage_results$bins <- cut(coverage_results$p_T, breaks = seq(0, 1, by = 0.05))
+coverage_summary <- coverage_results %>%
+  group_by(bins) %>%
+  summarise(
+    mean = mean(coverage_prob),
+    sd = sd(coverage_prob),
+    se = sd / sqrt(n()),
+    ci_lower = mean - qt(0.975, df = n() - 1) * se,
+    ci_upper = mean + qt(0.975, df = n() - 1) * se
+  ) %>%
+  mutate(bins_mid = as.numeric(gsub(".*\\((.+)\\,.+", "\\1", bins)) + 0.01 / 2)
+
+ggplot(coverage_results, aes(x = p_T)) +
+  geom_errorbar(data = coverage_summary, aes(x = bins_mid, ymin = ci_lower, ymax = ci_upper), width = 0.01, color = 'red') +
+  geom_point(data = coverage_summary, aes(x = bins_mid, y = mean), color = 'black', size = 3) +
+  labs(title = 'Оценки с ДИ для p_T', x = 'p_T', y = 'Вероятность накрытия')+theme_classic()
+
+```
+То же можно сказать для p_T, видимо наш вывод для изначальных значения p_T и p_R подтверждается и для других значений. Оценка теста консервативная и выше заданной, это может отвечать нашим требованиям или нет, зависит от наших целей.
+
+
+## 4. Построение ДИ для отношения шансов
+
+```{r OR}
+# На всякий случай перезадам df_trial, как в примере
+
+p_R <- 0.1 # Истинная вероятность выздоровления для референса (в ГЕНЕРАЛЬНОЙ СОВОКУПНОСТИ)
+p_T <- 0.2 # Истинная вероятность выздоровления для теста (в ГЕНЕРАЛЬНОЙ СОВОКУПНОСТИ)
+true_OR <- (p_T/(1-p_T))/(p_R/(1-p_R)) # Истинное отношение шансов
+sample_size <- 100 # Количество пациентов в каждой из групп
+
+df_trial <- data.frame(
+  arm = rep(c('R', 'T'), each = sample_size),
+  patient_ID = rep(1:sample_size, 2),
+  recovery_status = c(sample(c(1,0), sample_size, replace = TRUE, prob = c(p_R, 1 - p_R)),
+                      sample(c(1,0), sample_size, replace = TRUE, prob = c(p_T, 1 - p_T)))
+)
+
+df_OR <- df_trial %>%
+  dplyr::summarise(broom::tidy(fisher.test(table(.$arm, .$recovery_status)))) %>% 
+  mutate(catch = ifelse(conf.low < true_OR & true_OR < conf.high, "Catch", "Miss"))
+
+print(df_OR)
+```
+
+## ЗАДАНИЕ №2
+
+- Повторить этот эксперимент 1000 раз, каждый раз фиксируя факт накрытия истинного отношения шансов (true_OR). 
+- Оценить полученную вероятность накрытия с заданной по умолчанию (0.95).
+- Построить гистограмму точечной оценки отношения шансов (estimate) и подумать о ее распределении. 
+```{r}
+n_sims <- 1000
+coverage_count <- 0 
+or_estimates <- numeric(n_sims)
+
+for (i in 1:n_sims) {
+  set.seed(i)
+  recovery_R <- sample(c(1,0), sample_size, replace = TRUE, prob = c(p_R, 1 - p_R))
+  recovery_T <- sample(c(1,0), sample_size, replace = TRUE, prob = c(p_T, 1 - p_T))
+  df_trial <- data.frame(
+    arm = rep(c('R', 'T'), each = sample_size),
+    recovery_status = c(recovery_R, recovery_T)
+  )
+  fisher_test_result <- fisher.test(table(df_trial$arm, df_trial$recovery_status))
+  
+  conf.int <- fisher_test_result$conf.int
+  or_estimate <- fisher_test_result$estimate
+  if (conf.int[1] < true_OR && true_OR < conf.int[2]) {
+    coverage_count <- coverage_count + 1
+  }
+  or_estimates[i] <- or_estimate
+}
+
+coverage_prob <- coverage_count / n_sims
+or_estimates = data.frame(or_estimate = or_estimates)
+ggplot(or_estimates, aes(x = or_estimate)) +
+  geom_histogram(binwidth = 0.1)+ geom_vline(xintercept = true_OR,color = "red", size=1.5) +
+  labs(title = "Оценки отношения шансов", x = "Отношение шансов", y = "Частота") +
+  theme_classic()
+
+# Вывод вероятности накрытия
+print(paste("Вероятность накрытия:", coverage_prob))
+
+```
+Выводы: оценка снова консервативная (0.97 vs 0.95 ожидаемых). Оценки отношения шансов распределены скорее ненормально, распределение скошенное с длинным хвостом, однако реальная оценнка
+- Построить гистограмму точечной оценки отношения шансов (estimate) и подумать о ее распределении. 
+- Проверить, корректно ли работает методика построения ДИ, реализованная в fisher.test, при различных значениях p_R и p_T.
+```{r}
+n_sims = 100 # делаю меньше симуляций, т.к. считается слишком долго
+set.seed(2024)
+p_R_range <- seq(0.05, 0.99, by = 0.05)
+p_T_range <- seq(0.05, 0.99, by = 0.05)
+
+coverage_results <- data.frame(p_R = numeric(), p_T = numeric(), coverage_prob = numeric())
+
+for (p_R in p_R_range) {
+  for (p_T in p_T_range) {
+    coverage_count <- 0
+    true_OR <- (p_T/(1-p_T))/(p_R/(1-p_R))
+    for (i in 1:n_sims) {
+      
+      recovery_R <- sample(c(1,0), sample_size, replace = TRUE, prob = c(p_R, 1 - p_R))
+      recovery_T <- sample(c(1,0), sample_size, replace = TRUE, prob = c(p_T, 1 - p_T))
+      
+      df_trial <- data.frame(
+        arm = rep(c('R', 'T'), each = sample_size),
+        recovery_status = c(recovery_R, recovery_T)
+      )
+      
+      fisher_test_result <- fisher.test(table(df_trial$arm, df_trial$recovery_status))
+      
+      conf.int <- fisher_test_result$conf.int
+      if (conf.int[1] < true_OR && true_OR < conf.int[2]) {
+        coverage_count <- coverage_count + 1
+      }
+    }
+
+    coverage_prob <- coverage_count / n_sims
+    coverage_results <- rbind(coverage_results, data.frame(p_R = p_R, p_T = p_T, coverage_prob = coverage_prob))
+  }
+}
+
+ggplot(coverage_results, aes(x = p_R, y = coverage_prob)) +
+  geom_point() +
+  geom_line(aes(group = p_T, color = as.factor(p_T))) +
+  labs(title = "Зависимость вероятности накрытия от p_R", x = "p_R", y = "Вероятность накрытия", color = "p_T") +
+  theme_classic()
+
+```
+Какой-то очевидной линейной зависимости снова не видно, но визуально кажется, что ошибки для оценок здесь гораздо чаще: оценка ниже 0.95 встречается чаще и не сказать, что это строго коррелирует с p_T или p_R. 
+
+```{r}
+coverage_results$bins <- cut(coverage_results$p_R, breaks = seq(0, 1, by = 0.05))
+coverage_summary <- coverage_results %>%
+  group_by(bins) %>%
+  summarise(
+    mean = mean(coverage_prob),
+    sd = sd(coverage_prob),
+    se = sd / sqrt(n()),
+    ci_lower = mean - qt(0.975, df = n() - 1) * se,
+    ci_upper = mean + qt(0.975, df = n() - 1) * se
+  ) %>%
+  mutate(bins_mid = as.numeric(gsub(".*\\((.+)\\,.+", "\\1", bins)) + 0.01 / 2)
+
+ggplot(coverage_results, aes(x = p_R)) +
+  geom_errorbar(data = coverage_summary, aes(x = bins_mid, ymin = ci_lower, ymax = ci_upper), width = 0.01, color = 'red') +
+  geom_point(data = coverage_summary, aes(x = bins_mid, y = mean), color = 'black', size = 3) +
+  labs(title = 'Оценки с ДИ для p_R', x = 'p_R', y = 'Вероятность накрытия')+theme_classic()
+
+```
+Если мы усредняем оценки по бинам, то в целом все не так плохо, все средние выше 0.95, какого-то очевидного роста или падения вероятности накрытия интервалов, как мне кажется, нет.
+```{r}
+coverage_results$bins <- cut(coverage_results$p_T, breaks = seq(0, 1, by = 0.05))
+coverage_summary <- coverage_results %>%
+  group_by(bins) %>%
+  summarise(
+    mean = mean(coverage_prob),
+    sd = sd(coverage_prob),
+    se = sd / sqrt(n()),
+    ci_lower = mean - qt(0.975, df = n() - 1) * se,
+    ci_upper = mean + qt(0.975, df = n() - 1) * se
+  ) %>%
+  mutate(bins_mid = as.numeric(gsub(".*\\((.+)\\,.+", "\\1", bins)) + 0.01 / 2)
+
+ggplot(coverage_results, aes(x = p_T)) +
+  geom_errorbar(data = coverage_summary, aes(x = bins_mid, ymin = ci_lower, ymax = ci_upper), width = 0.01, color = 'red') +
+  geom_point(data = coverage_summary, aes(x = bins_mid, y = mean), color = 'black', size = 3) +
+  labs(title = 'Оценки с ДИ для p_T', x = 'p_T', y = 'Вероятность накрытия')+theme_classic()
+
+```
+В целом, то же можно сказать про p_T, самая плохая оценка на 0.5, но в целом оценки консервативные, хотя вероятность ошибки явно выше для оценки шансов, чем в первом случае, что, вероятно, связано с тем, как распределены эти значения (в случае с шансами распределение очень непохоже на нормальное).
