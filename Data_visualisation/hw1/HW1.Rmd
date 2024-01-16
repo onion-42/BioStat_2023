@@ -1,0 +1,245 @@
+---
+title: "HW1 Data Vis"
+author: "Nadezhda Lukashevich"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+library(tidyverse)
+
+```
+
+### 1. Загрузите датасет insurance_cost.csv (лежит в папке домашнего задания). Это данные по базовым показателям здоровья индивида и сумме, которую страховая компания заплатила за его лечение в год. Обычно эти данные используют, чтобы потренироваться в предсказании того, как определённые характеристики индивида повышают траты страховой компании (и, соответственно, должны быть заложены в цену страховки).
+```{r read}
+df <- read_csv('insurance_cost.csv')
+head(df)
+```
+```{r}
+summary(df)
+```
+
+
+### 2. Выведите гистограммы всех нумерических переменных.
+```{r hist}
+numeric_vars <- df %>%
+  select_if(is.numeric)
+
+numeric_vars %>%
+  gather(key = "переменные", value = "значения") %>%
+  ggplot(aes(x = значения)) +
+  geom_histogram(bins = 30, fill = "lightgray", color = "black") +
+  facet_wrap(~переменные, scales = "free") + theme_classic()
+```
+
+### 3. Нарисуйте график плотности по колонке charges. Отметьте вертикальные линии средней и медианы на графике. Раскрасьте текст и линии средней и медианы разными цветами. Добавьте текстовые пояснения значения средней и медианы. Подберите тему для графика. Назовите оси.
+```{r charges_kde}
+mean_charges <- mean(df$charges)
+median_charges <- median(df$charges)
+
+density_plot <- ggplot(df, aes(x = charges)) +
+  geom_density(fill="skyblue", alpha=0.6) +
+  geom_vline(aes(xintercept = mean_charges), color="mediumpurple4", linetype="dashed", size=1) +
+  geom_vline(aes(xintercept = median_charges), color="darkolivegreen", linetype="dotted", size=1) +
+  geom_label(aes(x = mean_charges, label = paste("Mean:", round(mean_charges, 2)), y = 2e-5), vjust = -0.5, color="mediumpurple4", hjust=-0.02, fontface = "bold") +
+  geom_label(aes(x = median_charges, label = paste("Median:", round(median_charges, 2)), y = 6.5e-5), vjust = 1.5, color="darkolivegreen", hjust=-0.02, fontface = "bold") +
+  labs(title="Density Plot for Charges", x="Charges", y="Density") +
+  theme_classic()
+
+density_plot
+```
+
+### 4. Сделайте три box_plot по отношению переменных charges и (1) sex (2) smoker (3) region. Подберите тему для графика. Назовите оси.
+```{r boxplots}
+
+# charges vs sex
+p1 <- ggplot(df, aes(x = sex, y = charges, fill = sex)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2, size = 0.5, alpha = 0.1)  +
+  labs(title = "Charges by Sex", x = "Sex", y = "Charges") +
+  theme_classic()
+
+# charges vs smoker
+p2 <- ggplot(df, aes(x = smoker, y = charges, fill = smoker)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2, size = 0.5, alpha = 0.1)  +
+  labs(title = "Charges by Smoker", x = "Smoker", y = "Charges") +
+  theme_classic()
+
+# charges vs region
+p3 <- ggplot(df, aes(x = region, y = charges, fill = region)) +
+  geom_boxplot()+
+  geom_jitter(width = 0.2, size = 0.5, alpha = 0.1)  +
+  labs(title = "Charges by Region", x = "Region", y = "Charges") +
+  theme_classic()
+
+# grid
+library(gridExtra)
+grid.arrange(p1, p2, p3, nrow = 3, layout_matrix = rbind(c(1), c(2), c(3)),
+heights = c(6, 6, 6))
+```
+### 5. Объедините графики из заданий 3 и 4 в один так, чтобы сверху шёл один график из
+задания 3, а под ним 3 графика из задания 4. Сделайте общее название для графика.
+
+```{r unite}
+layout_matrix <- rbind(c(1, 1),
+                       c(2, 3),
+                       c(4, 4))
+
+grid.arrange(density_plot, p1, p2, p3, layout_matrix = layout_matrix, 
+             top = "Analysis of Charges", heights = c(20, 10, 10))
+```
+
+
+### 6. Сделайте фасет графика из задания 3 по колонке region.
+```{r facet}
+# Придется перезадать график чтобы обновить медианы и средние
+
+df_stats <- df %>%
+  group_by(region) %>%
+  summarize(mean_charges = mean(charges),
+            median_charges = median(charges))
+
+df_w_mean <- left_join(df, df_stats, by = "region")
+
+facet_density_plot <- ggplot(df_w_mean, aes(x = charges)) +
+  geom_density(fill = "skyblue", alpha = 0.6) +
+  geom_vline(aes(xintercept = mean_charges), color = "mediumpurple4", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = median_charges), color = "darkolivegreen", linetype = "dotted", size = 1) +
+  geom_label(aes(x = mean_charges, label = paste("Mean:", round(mean_charges, 2)), y = 2e-5), color = "white", fill = "mediumpurple4", hjust =-.01, size = 3, show.legend = FALSE) +
+geom_label(aes(x = median_charges, label = paste("Median:", round(median_charges, 2)), y = 5e-5), color = "white", fill = "darkolivegreen", hjust = -.01,  size = 3, show.legend = FALSE) +
+labs(title = "Density Plot for Charges by Region", x = "Charges", y = "Density") +
+theme_classic() +
+facet_wrap(~ region)
+facet_density_plot
+
+```
+
+### 7. Постройте scatter plot отношения переменных age и charges. Добавьте названия осей, название графика и тему. Сделайте так, чтобы числа по оси Х отображались 14 шрифтом.
+```{r scatter}
+scatter_plot <- ggplot(df, aes(x = age, y = charges)) +
+  geom_point(aes(colour = sex), alpha=0.8) +
+  labs(title = "Scatter, Age vs Charges",
+       x = "Age",
+       y = "Charges") +
+  theme_classic() + 
+  theme(axis.text.x = element_text(size = 14)) 
+scatter_plot
+```
+
+### 8. Проведите линию тренда для предыдущего графика.
+
+```{r trend_line}
+scatter_plot <- scatter_plot+geom_smooth(method = "lm", se = TRUE, color='black')
+scatter_plot
+
+```
+
+
+### 9. Сделайте разбивку предыдущего графика по колонке smokers (у вас должно получится две линии тренда для курящих и нет).
+```{r}
+scatter_smokers <- ggplot(df, aes(x = age, y = charges, color = smoker)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) + 
+  labs(title = "Scatter, Age vs Charges by Smoking Status",
+       x = "Age",
+       y = "Charges") +
+  theme_classic() +
+  theme(axis.text.x = element_text(size = 14)) + 
+  scale_color_manual(values = c("skyblue", "salmon")) 
+
+scatter_smokers
+```
+
+### 10. Сделайте график из заданий 7-9, но вместо переменной age используйте переменную bmi.
+```{r}
+scatter_bmi_smokers <- ggplot(df, aes(x = bmi, y = charges, color = smoker)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) + 
+  labs(title = "Scatter, BMI vs Charges by Smoking Status",
+       x = "BMI",
+       y = "Charges") +
+  theme_classic() +
+  theme(axis.text.x = element_text(size = 14)) + 
+  scale_color_manual(values = c("skyblue", "salmon")) 
+
+scatter_bmi_smokers
+```
+
+### 11. Самостоятельно задайте вопрос No1 к данным (вопрос должен быть про какую-то подвыборку данных). Ответьте на него построив график на подвыборке данных. График должен содержать все основные элементы оформления (название, подписи осей, тему и проч.). Аргументируйте выбор типа графика.
+
+#### Вопрос 1. Как влияет курение на страховые выплаты в разных возрастных группах?
+
+```{r}
+
+df_w_mean$age_group <- cut(df$age, breaks = c(0, 18, 35, 50, 64, Inf), labels = c("0-18", "19-35", "36-50", "51-64", "65+"))
+
+ggplot(df_w_mean, aes(x = age_group, y = charges, fill = smoker)) +
+  geom_boxplot(position = position_dodge(width = 0.8)) +
+  geom_jitter(color = 'black', position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8), alpha = 0.1) +
+  labs(title = "Charges by Age Group and Smoking Status", x = "Age Group", y = "Charges") +
+  theme_classic() +
+  scale_fill_brewer(palette = "Set2")  
+
+# Боксплоты тут хорошо подходят. Они позволяют наглядно сравнивать распределение страховых выплат между курящими и некурящими в разных возрастных группах, поскольку репрезентируют IQR и медианы -- которые позволяют сделать какие-то вывод о сравнении групп. Здесь график показывает, что курение явно более сильный предиктор более высоких страхоовых, однако возрастная группа также имеет значение.
+```
+
+
+### 12. Самостоятельно задайте вопрос No2 к данным (вопрос должен быть про какую-то подвыборку данных). Ответьте на него построив график на подвыборке данных. График должен содержать все основные элементы оформления (название, подписи осей, тему и проч.). Аргументируйте выбор типа графика.
+#### Как распределены страховые выплаты в зависимости от индекса массы тела среди разных полов?
+```{r}
+ggplot(df, aes(x = bmi, y = charges, color = sex)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(title = "Charges by BMI and Sex", x = "BMI", y = "Charges") +
+  theme_classic() +
+  scale_color_brewer(palette = "Set1")
+
+# Как мне кажется, скаттер тут может подойти, поскольку мы наглядно видим зависимость между BMI и выплатами (если она есть) и при этом цвета помогают идентифицировать дополнительно распределения групп. Здесь график ясно показывает, что корреляция между выплатами и ИМТ слабая, но положительная, и то же для пола (наклон для линии тренда мужчин чуть выше), но в целом зависимости достаточно слабые и скорее всего будут малоинформативны для модели, особенно по сравнению с некоторыми другими.
+
+```
+
+
+### 13. Самостоятельно задайте вопрос No3 к данным (вопрос должен быть про какую-то подвыборку данных). Ответьте на него построив график на подвыборке данных. График должен содержать все основные элементы оформления (название, подписи осей, тему и проч.). Аргументируйте выбор типа графика.
+
+
+```{r}
+df_avg_charges_by_region <- aggregate(charges ~ region, data = df, FUN = mean)
+
+ggplot(df_avg_charges_by_region, aes(x = region, y = charges, fill = region)) +
+geom_bar(stat = "identity") +
+labs(title = "Average Charges by Region", x = "Region", y = "Average Charges") +
+theme_classic() +
+scale_fill_brewer(palette = "Set2")
+
+# Гистограмма помогает наглядно сравнить группы, чтобы идентифицировать более широкие тенденции
+```
+
+### 14. (это задание засчитывается за два) Приблизительно повторите график:
+![Graph_to_repeat](graph.png)
+```{r}
+df_w_mean$age_group <- cut(df$age, breaks = c(21, 34, 49, Inf), labels = c("age: 21-34", "age: 35-49", "age: 50+"))
+
+# Filter out rows with missing values in "age_group"
+df_w_mean <- df_w_mean[!is.na(df_w_mean$age_group),]
+
+df_w_mean$log_charges = log1p(df_w_mean$charges)
+```
+
+```{r}
+# Create scatterplots for each age group with colored regression lines
+ggplot(df_w_mean, aes(x = bmi, y = log_charges)) +
+  geom_point(color='#330066', alpha=0.4) +
+  geom_smooth(aes(color = age_group), method = "lm", se = TRUE) +  # Specify color aesthetic
+  facet_wrap(~ age_group, scales = "fixed") +
+  labs(x = "bmi",
+       y = "log(charges)") +
+  theme_minimal() +
+  theme(legend.position = "bottom")  # Position the legend at the bottom
+
+```
+
+
+
