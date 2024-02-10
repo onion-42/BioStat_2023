@@ -1,0 +1,1394 @@
+---
+title: "HW2 Regression Analysis Redone"
+author: "Nadezhda Lukashevich"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+ 
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message=FALSE)
+library(tidyverse)
+library(MASS, include.only = c("fitdistr"))
+library(dplyr)
+library(gridExtra)
+library(gtsummary)
+library(ggpubr)
+library(rstatix)
+library(dagitty)
+library(ggdag)
+library(RColorBrewer)
+library(car)
+library(modelsummary)
+library(ggfortify)
+library(reshape2)
+
+data <- read.csv("congenital_cataract.csv") %>%
+  mutate(across(where(~ !is.numeric(.)), as.factor))
+
+```
+# EDA
+
+```{r descriptive_statistics_by_strat, fig.cap = "" }
+
+data_for_summary <- data  %>%
+  select(-X, -id)
+
+
+table_summary <- data_for_summary %>%
+  tbl_summary(
+    by = strat,
+    type = all_continuous() ~ "continuous2",
+    missing = "no",
+    statistic = list(
+      all_continuous() ~ c("{median}({IQR})","{mean}±{sd}", "{min}; {max}"), 
+      all_categorical() ~ "{n}({p}%)" 
+    )
+  ) %>% 
+  add_overall() %>% 
+  add_n() %>% 
+  add_p() %>% 
+  modify_header(label = "**Переменные**") %>% 
+  modify_spanning_header(c("stat_1", "stat_2") ~ "**Описательная статистика по стратегии**")%>%   modify_footnote(
+    all_stat_cols() ~ "Median (IQR), Mean±std, Min; Max, or N(Frequency)"
+  ) 
+
+
+table_summary
+```
+<div style="height:20px;"></div>
+Возраст в группе артефакии значимо (p<0.05) выше, что можно объяснить тем, что, возможно, артефакия способствует нормальному развитию глаза лучше, чем афакия, и поэтому с возрастом зрение может улучшаться. Стратегия лечения не  зависит от стороны операции и наличия глаукомы, как и ожидается. Значения остроты зрения вдали значимо (p<0.1) выше для группы артефакии, и не различается для остроты зрения вблизи.
+<div style="height:20px;"></div>
+
+```{r descriptive_statistics_by_glau, fig.cap = ""}
+data_for_summary <- data  %>%
+  select(-X, -id)
+
+
+table_summary <- data_for_summary %>%
+  tbl_summary(
+    by = glau,
+    type = all_continuous() ~ "continuous2",
+    missing = "no",
+    statistic = list(
+      all_continuous() ~ c("{median}({IQR})","{mean}±{sd}", "{min}; {max}"), 
+      all_categorical() ~ "{n}({p}%)" 
+    )
+  ) %>% 
+  add_overall() %>% 
+  add_n() %>% 
+  add_p() %>% 
+  modify_header(label = "**Переменные**") %>% 
+  modify_spanning_header(c("stat_1", "stat_2") ~ "**Описательная статистика по наличию глаукомы**")%>%   modify_footnote(
+    all_stat_cols() ~ "Median (IQR), Mean±std, Min; Max, or N(Frequency)"
+  ) 
+
+
+table_summary
+```
+<div style="height:20px;"></div>
+Возраст, стратегия лечения и сторона операции не связаны с наличием глаукомы. Острота  зрения вдали на уровне значимости 0.01 значимо выше в группе без глаукомы, и это не так для остроты зрения вблизи, где острота не отличается между группами. Это можно объяснить тем, что при прогрессировании глаукомы может наступать утрата периферийного зрения, а для задач, требующих чтение вблизи, часто важно скорее центральное зрение, в то время как для задач, требующих зрение вдали периферийное зрение может быть более важно. Возможно, это также связано со способом оценки острот зрения, где для оценки остроты вблизи может в меньшей степени быть задействовано периферическое зрение.
+<div style="height:20px;"></div>
+```{r combined_density_plot, fig.cap = "Оценка функции плотности вероятности для острот зрения показывает, что острота зрения вдали в бОльшей степени инфильтрирована низкими  значениями. Таким образом, можно сказать, основываясь на  наших данных, восстановление остроты зрения вблизи для больных врожденной катарактой происходит лучше, чем то же для зрения вдали. Посмотрим то же  по стратегиям лечения."}
+ggplot() + geom_density(data = data, aes(x = bcdva, fill = "bcdva"), alpha = 0.6) +
+  geom_density(data = data, aes(x = bcnva, fill = "bcnva"), alpha = 0.6) +
+  scale_fill_manual(values = c("bcdva" = "skyblue", "bcnva" = "darkolivegreen"), 
+                    name = "Тип остроты зрения", 
+                    labels = c("bcdva" = "Острота вдали", "bcnva" = "Острота вблизи")) +
+  labs(title = "Распределение острот зрения", x = "Острота зрения", y = "Плотность") +
+  theme_classic()
+
+```
+
+
+
+```{r density_plot, fig.cap = "Для острот вдали и вблизи мы наблюдаем небольшое смещение в сторону повышение острот в группах со стратегией лечения Артефакия. Также, для остроты зрения вблизи показали, что распределение двуглавое: т.е. имеются 2 группы пациентов, одна из которых, возможно, лучше отвечает на стратегию лечения, чем другая. Видно, что мода распределения остроты зрения вблизи для распределения с лучшим ответом для афакии ниже, чем аналогичная для артефакии. Для остроты зрения вдали группу с бОльшей остротой зрения выбрать трудно, хотя такие пациенты есть, их немного." }
+data_grouped_bcdva <- data %>%
+  group_by(strat) %>%
+  summarise(mean_bcdva = mean(bcdva),
+            median_bcdva = median(bcdva))
+
+data_grouped_bcnva <- data %>%
+  group_by(strat) %>%
+  summarise(mean_bcnva = mean(bcnva),
+            median_bcnva = median(bcnva))
+
+density_plot <- ggplot(data, aes(x = bcdva)) +
+  geom_density(fill="skyblue", alpha=0.6) +
+  geom_vline(data = data_grouped_bcdva, aes(xintercept = mean_bcdva), color="mediumpurple4", linetype="dashed", size=1) +
+  geom_vline(data = data_grouped_bcdva, aes(xintercept = median_bcdva), color="darkolivegreen", linetype="dotted", size=1) +
+  geom_label(data = data_grouped_bcdva, aes(x = mean_bcdva, label = paste("Mean:", round(mean_bcdva, 2)), y = 3), vjust = -0.5, color="mediumpurple4", hjust=-0.02, fontface = "bold") +
+  geom_label(data = data_grouped_bcdva, aes(x = median_bcdva, label = paste("Median:", round(median_bcdva, 2)), y = 2), vjust = 1.5, color="darkolivegreen", hjust=-0.02, fontface = "bold") +
+  facet_wrap(~ strat) +
+  labs(title="Распределение остроты\nзрения вдали", x="Острота зрения вдали", y="Плотность") +
+  theme_classic()
+
+density_plot2 <- ggplot(data, aes(x = bcnva)) +
+  geom_density(fill="darkolivegreen", alpha=0.6) +
+  geom_vline(data = data_grouped_bcnva, aes(xintercept = mean_bcnva), color="mediumpurple4", linetype="dashed", size=1) +
+  geom_vline(data = data_grouped_bcnva, aes(xintercept = median_bcnva), color="skyblue", linetype="dotted", size=1) +
+  geom_label(data = data_grouped_bcnva, aes(x = mean_bcnva, label = paste("Mean:", round(mean_bcnva, 2)), y = 1.5), vjust = -0.5, color="mediumpurple4", hjust=-0.02, fontface = "bold") +
+  geom_label(data = data_grouped_bcnva, aes(x = median_bcnva, label = paste("Median:", round(median_bcnva, 2)), y = 2), vjust = 1.5, color="skyblue", hjust=-0.02, fontface = "bold") +
+  facet_wrap(~ strat) +
+  labs(title="Распределение остроты\nзрения вблизи", x="Острота зрения вблизи", y="Плотность") +
+  theme_classic()
+
+grid.arrange(density_plot, density_plot2, ncol = 2, nrow=1)
+
+```
+```{r density_plot_glau, fig.cap = "При стратификации по признаку глаукомы наблюдаем похожую картину. Распределение остроты зрения вдали инфильтрированно низкими значениями, т.е. по данному признаку восстановление имеет низкую частоту. В группе без глаукомы острота выше по медиане и среднему. Для остроты зрения вблизи разделенной по наличию глаукомы снова наблюдаем двуглавое распределение, пересекающееся где-то на 0.5 для шкалы. Здесь гораздо больше значений превышающих 0.5, чем для остроты вдали. В группе без глаукомы острота зрения вблизи также выше по медиане и среднему." }
+data_grouped_bcdva <- data %>%
+  group_by(glau) %>%
+  summarise(mean_bcdva = mean(bcdva),
+            median_bcdva = median(bcdva))
+
+data_grouped_bcnva <- data %>%
+  group_by(glau) %>%
+  summarise(mean_bcnva = mean(bcnva),
+            median_bcnva = median(bcnva))
+
+density_plot <- ggplot(data, aes(x = bcdva)) +
+  geom_density(fill="skyblue", alpha=0.6) +
+  geom_vline(data = data_grouped_bcdva, aes(xintercept = mean_bcdva), color="mediumpurple4", linetype="dashed", size=1) +
+  geom_vline(data = data_grouped_bcdva, aes(xintercept = median_bcdva), color="darkolivegreen", linetype="dotted", size=1) +
+  geom_label(data = data_grouped_bcdva, aes(x = mean_bcdva, label = paste("Mean:", round(mean_bcdva, 2)), y = 3), vjust = -0.5, color="mediumpurple4", hjust=-0.02, fontface = "bold") +
+  geom_label(data = data_grouped_bcdva, aes(x = median_bcdva, label = paste("Median:", round(median_bcdva, 2)), y = 2), vjust = 1.5, color="darkolivegreen", hjust=-0.02, fontface = "bold") +
+  facet_wrap(~ glau) +
+  labs(title="Распределение остроты\nзрения вдали по наличию глаукомы", x="Острота зрения вдали", y="Плотность") +
+  theme_classic()
+
+density_plot2 <- ggplot(data, aes(x = bcnva)) +
+  geom_density(fill="darkolivegreen", alpha=0.6) +
+  geom_vline(data = data_grouped_bcnva, aes(xintercept = mean_bcnva), color="mediumpurple4", linetype="dashed", size=1) +
+  geom_vline(data = data_grouped_bcnva, aes(xintercept = median_bcnva), color="skyblue", linetype="dotted", size=1) +
+  geom_label(data = data_grouped_bcnva, aes(x = mean_bcnva, label = paste("Mean:", round(mean_bcnva, 2)), y = 1.5), vjust = -0.5, color="mediumpurple4", hjust=-0.02, fontface = "bold") +
+  geom_label(data = data_grouped_bcnva, aes(x = median_bcnva, label = paste("Median:", round(median_bcnva, 2)), y = 2), vjust = 1.5, color="skyblue", hjust=-0.02, fontface = "bold") +
+  facet_wrap(~ glau) +
+  labs(title="Распределение остроты\nзрения вблизи", x="Острота зрения вблизи", y="Плотность") +
+  theme_classic()
+
+grid.arrange(density_plot, density_plot2, ncol = 2, nrow=1)
+
+```
+<div style="height:20px;"></div>
+**Выводы по распределениям признаков.** Распределения острот зрения не похожи на нормальные, и при этом количество пациентов в выборке не дает нам с большой уверенностью полагаться на ЦПТ. 
+
+Для остроты зрения вдали при обеих стратегиях характерны распределения, инфильтрированные низкими значениями. Попробую логарифмировать эту переменную, добавив сдвиг к нулю, чтобы логарифм был определен во всем диапазоне чисел. То, что логарифм будет отрицательным, мне неважно, поскольку я буду моделировать признак линейной регрессией, и она предполагает непрерывность зависимой переменной. При интерпретации коэффициентов я буду применять обратное преобразование, т.е. экспоненциальную функцию с вычетом сдвига, к коэффициентам модели. Тогда коэффициенты будут интерпретироваться как увеличение зависимой переменной в exp(beta) раз в исследуемой группе для положительного beta и уменьшение  в 1/exp(beta) раз для отрицательного beta, поскольку отношение между beta и переменной изменится со сложения на умножение. Ниже  построю QQ plot для лог-нормального распределения (т.е. распределения  переменной, чей логарифм распределен нормально).
+
+Для остроты зрения вблизи особенно при стратификации были видны 2 пересекающихся распределения c двумя модами. Т.к. вычленять их я не умею, и судя по всему это сложно, я попробую бинаризовать переменную по отсечке 0.5 и предсказывать переменную логистической регрессией, которая также легко интерпретируется, поскольку ее коэффициенты преобразуются в отношение шансов. Отсечка, во первых, является середной для шкалы - она изменяется от 0 дло 1. Во-вторых, во всех случаях моды двух распределений разделялись по этим отсечкам. 
+<div style="height:20px;"></div>
+
+
+```{r log_bcdva, fig.cap = "Видим, что распределение логарифма действительно похоже на нормальное. Добавление сдвига при этом помогло определить логарифм для всех значений."}
+err <- 0.0001 
+data$bcdva_log <- log2(data$bcdva+err) 
+if (all(data$data$bcdva+err!=0)){
+  print('В распределении остроты зрения после добавления шума нет значений, равных 0')
+}
+density_plot <- ggplot(data, aes(x = bcdva_log)) +
+  geom_density(fill="skyblue", alpha=0.6) +
+  geom_vline(aes(xintercept = mean(bcdva_log)), color="mediumpurple4", linetype="dashed", size=1) +
+  geom_vline(aes(xintercept = median(bcdva_log)), color="darkolivegreen", linetype="dotted", size=1) +
+  geom_label(aes(x = mean(bcdva_log), label = paste("Mean:", round(mean(bcdva_log), 2)), y = 0.15), vjust = -0.5, color="mediumpurple4", hjust=-0.02, fontface = "bold") +
+  geom_label(aes(x = median(bcdva_log), label = paste("Median:", round(median(bcdva_log), 2)), y = 0.1), vjust = 1.5, color="darkolivegreen", hjust=-0.02, fontface = "bold") +
+  labs(title="Распределение остроты зрения вдали после лог-шкалирования", x="bcdva_log", y="Density") +
+  theme_classic() +
+  facet_wrap(~ strat)
+density_plot
+```
+
+```{r qq_lognormal, fig.cap = "Почти для всех точек квантили распределены также, как теоретические, крмое последних шести точек. Это говорит о том, что верхние квантили отклоняются от логнормального распределения. Тем не менее, это хороший результат, который можно брать в работу."}
+fit_params <- fitdistr(data$bcdva+err, "lognormal")
+quants <- seq(0, 1, length = 100)[2:100]
+fit_quants <- qlnorm(quants, fit_params$estimate['meanlog'], fit_params$estimate['sdlog'])
+data_quants <- quantile(data$bcdva+err, quants)
+
+p<- plot(fit_quants, data_quants, xlab = "Теоретические квантили логнормального распределения", ylab = "Квантили для log- остроты зрения вдали со сдвигом")+title(main = "Q-Q плот для логнормального распределения")+abline(0, 1)
+```
+
+
+```{r bcnva_cat, fig.cap = "Бинаризация переменной при простом пересечении выделяет группу со стратегией лечения Артефакия как обогащенную значениями остроты зрения меньше 0.5. Но нормализация по стратегиям не показывает какого-то явного обогащения. "}
+data <- data %>% mutate("bcnva_cat"=as.factor(ifelse(bcnva > 0.5,'Острота вблизи >0.5','Острота вблизи <=0.5'))) 
+
+conf_matrix <- table(data$strat,data$bcnva_cat)
+conf_matrix_melted <- melt(conf_matrix)
+
+p1<-ggplot(conf_matrix_melted, aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  geom_text(aes(label = value), vjust = -0.3) +
+  labs(y = "Бинаризованная острота зрения вблизи", x = "Стратегия лечения", fill = "Количество") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+conf_matrix_percent <- sweep(conf_matrix, 1, rowSums(conf_matrix), FUN = "/")
+conf_matrix_percent_melted <- melt(conf_matrix_percent)
+
+p2 <- ggplot(conf_matrix_percent_melted, aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  geom_text(aes(label = sprintf("%.1f%%", 100 * value)), vjust = -0.3) +
+  labs(y = "Бинаризованная острота зрения вблизи", x = "Стратегия лечения", fill = "Проценты по стратегиям") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+plot<-ggarrange(p1, p2, ncol = 2, nrow=1, legend="bottom")
+annotate_figure(plot, top = text_grob("Количества и проценты для пересечния стратегии лечения и остроты зрения вблизи", face = "bold", size = 12))
+```
+
+
+```{r cor_age_strat, fig.cap = "Для остроты зрения вдали не наблюдается монотонной связи с возрастом при артефакии, и наблюдается отрицательная значимая корреляция (-0.47) с возрастом при афакии (p<0.05). Для остроты зрения вблизи для стратегии артефакии наблюдается значимая положительная корреляция  c возрастом на уровне значимости 0.1 с коэффициентом корреляции 0.27. Для стратегии афакии наблюдается значимая отрицательная корреляция с возрастом (p<0.01) с коэффициентов корреляции -0.61. Таким образом, можно сказать, что с возрастом зрение ухудшается после афакии, и это скорее не так после артефакии. Это может быть связано с тем, что имплантация искусственного хрусталика по мере роста ребенка помогает поддерживать нормальную анатомию глаза, что способствует более правильному развитию зрения и видимо это более заметно для зрения вблизи. Ухудшение остроты зрения вблизи с возрастом после афакии может быть связано с отсутствием хрусталика, что может влиять на анатомическое развитие глаза. Даже если для коррекции зрения используются контактные линзы, они могут не полностью компенсировать отсутствие естественного хрусталика." }
+cor_bcdva <- data %>%group_by(strat) %>%
+                cor_test(bcdva, age_flwp, method = "spearman")%>%
+  mutate(label = paste(strat, "rho:", round(cor, 2), "p:", round(p, 3)))
+
+cor_bcnva <- data %>%group_by(strat) %>%
+                cor_test(bcnva, age_flwp, method = "spearman")%>%
+  mutate(label = paste(strat, "rho:", round(cor, 2), "p:", round(p, 3)))
+
+plot_bcdva <- ggplot(data, aes(x = age_flwp, y = bcdva, color = strat)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  scale_color_brewer(palette = "Dark2") +
+  labs(title =paste(cor_bcdva$label, collapse = ";\n"), 
+       x = "Возраст на follow-up", y = "Острота зрения вдали") +
+  theme_classic()
+
+plot_bcnva <- ggplot(data, aes(x = age_flwp, y = bcnva, color = strat)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  scale_color_brewer(palette = "Dark2") +
+  labs(title = paste(cor_bcnva$label, collapse = ";\n"), 
+       x = "Возраст на follow-up", y = "Острота зрения вблизи")+
+  theme_classic()
+
+
+plot<-ggarrange(plot_bcdva, plot_bcnva, ncol = 2, nrow=1, common.legend = TRUE, legend="bottom")
+annotate_figure(plot, top = text_grob("Остроты зрения против возраста на фоллоу-ап,\nкорреляция Спирмана по стратегиям лечения", face = "bold", size = 12))
+```
+
+```{r cor_age_glau, fig.cap = "Независимо от того, есть у пациента глаукома или нет, монотонной связи остроты зрения с возрастом не наблюдается. Это можно объяснить тем, что, возможно, темп прогрессирования глаукомы очень индивидуален, и потому не отражается в монотонной связи с возрастом."}
+cor_bcdva <- data %>%group_by(glau) %>%
+                cor_test(bcdva, age_flwp, method = "spearman")%>%
+  mutate(label = paste(glau, "rho:", round(cor, 2), "p:", round(p, 3)))
+
+cor_bcnva <- data %>%group_by(glau) %>%
+                cor_test(bcnva, age_flwp, method = "spearman")%>%
+  mutate(label = paste(glau, "rho:", round(cor, 2), "p:", round(p, 3)))
+
+plot_bcdva <- ggplot(data, aes(x = age_flwp, y = bcdva, color = glau)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  scale_color_brewer(palette = "Dark2") +
+  labs(title =paste(cor_bcdva$label, collapse = ";\n"), 
+       x = "age_flwp", y = "bcdva") +
+  theme_classic()
+
+plot_bcnva <- ggplot(data, aes(x = age_flwp, y = bcnva, color = glau)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  scale_color_brewer(palette = "Dark2") +
+  labs(title = paste(cor_bcnva$label, collapse = ";\n"), 
+       x = "age_flwp", y = "bcnva")+
+  theme_classic()
+
+
+plot<-ggarrange(plot_bcdva, plot_bcnva, ncol = 2, nrow=1, common.legend = TRUE, legend="bottom")
+annotate_figure(plot, top = text_grob("Остроты зрения против возраста на фоллоу-ап,\nкорреляция Спирмена по наличию глаукомы", face = "bold", size = 12))
+```
+
+```{r boxplot_glau_strat, fig.cap = "На уровне значимости 0.05 в группе со стратегией артефакии и без глаукомы острота зрения вдали значения острот зрения как правило больше, чем в в группах со стратегией афакии (с и без глаукомы), и то же верно на уровне значимости 0.1 по сравнению с группой артефакии и глаукомы. Стоит отметить, что эти связи незначимы после поправки на множественные сравнения, что, возможно, говорит о малой выборке (62 пациента). Для остроты зрения вблизи мы не отвергаем нулевую гипотезу о том, что распределения двух групп идентичны, при разных стратегиях и при отсутствии и наличии глаукомы."}
+data <- data %>%
+  mutate(strat_glau = interaction(strat, glau, sep = " - Glau: "))
+
+wilcox_test_bcdva <- data %>%
+  wilcox_test(bcdva ~ strat_glau)%>%
+ adjust_pvalue(method="fdr")
+
+wilcox_test_bcnva <- data %>%
+  wilcox_test(bcnva ~ strat_glau)%>%
+ adjust_pvalue(method="fdr")
+
+create_boxplot <- function(data,x_var, x_name, y_var, test_results) {
+  if (y_var=='bcdva'){l <- 'Острота зрения вдали'
+  max_val <- 1.43}
+  else{l<-'Острота зрения вблизи'
+  max_val <- 1.6}
+  p <- ggboxplot(
+    data, x = x_var, y = y_var, 
+    color = x_var, 
+    add = "jitter"
+  ) +
+  labs(x = x_name, y = l) +
+  theme_classic()+ rotate_x_text()
+
+  y_positions <- seq(from = max(data[[y_var]])+0.6, by = (-diff(range(data[[y_var]]))/8), length.out = nrow(test_results))
+  p  + expand_limits(y = max_val) + stat_pvalue_manual(test_results, label = "p = {p}; fdr = {p.adj}", y.position = y_positions, label.size = 2.5)
+}
+
+boxplot_bcdva <- create_boxplot(data,'strat_glau', "Стратегия лечения и наличие глаукомы", "bcdva", wilcox_test_bcdva)
+boxplot_bcnva <- create_boxplot(data, 'strat_glau', "Стратегия лечения и наличие глаукомы","bcnva", wilcox_test_bcnva)
+
+plot<-ggarrange(boxplot_bcdva, boxplot_bcnva, ncol = 2, nrow = 1, common.legend = TRUE, legend="bottom", heights = c(3, 3))
+annotate_figure(plot, top = text_grob("Остроты зрения по стратегиям лечения и глаукоме, MWU тест", face = "bold", size = 12))
+```
+
+```{r boxplot_side_strat, fig.cap = "Для острот зрения вблизи и вдали мы не отвергаем нулевую гипотезу о том, что распределения двух групп идентичны, при разных стратегиях и при разных сторнах операции."}
+data <- data %>%
+  mutate(side_strat = interaction(strat, side, sep = " - Side: "))
+
+wilcox_test_bcdva <- data %>%
+  wilcox_test(bcdva ~ side_strat)%>%
+ adjust_pvalue(method="fdr")
+
+wilcox_test_bcnva <- data %>%
+  wilcox_test(bcnva ~ side_strat)%>%
+ adjust_pvalue(method="fdr")
+
+boxplot_bcdva <- create_boxplot(data,'side_strat', "Сторона операции и стратегия лечения", "bcdva", wilcox_test_bcdva)
+boxplot_bcnva <- create_boxplot(data,'side_strat', "Сторона операции и стратегия лечения", "bcnva", wilcox_test_bcnva)
+
+plot<-ggarrange(boxplot_bcdva, boxplot_bcnva, ncol = 2, nrow = 1, common.legend = TRUE, legend="bottom", heights = c(3, 3))
+annotate_figure(plot, top = text_grob("Остроты зрения по сторонам операции и стратегии, MWU тест", face = "bold", size = 12))
+```
+```{r boxplot_side_glau, fig.cap = "Для острот зрения вблизи и вдали мы не отвергаем нулевую гипотезу о том, что распределения двух групп идентичны, при разных сторнах операции и наличии или отсутствие глаукомы."}
+data <- data %>%
+  mutate(side_glau = interaction(side, glau, sep = "side - Glau: "))
+
+wilcox_test_bcdva <- data %>%
+  wilcox_test(bcdva ~ side_glau)%>%
+ adjust_pvalue(method="fdr")
+
+wilcox_test_bcnva <- data %>%
+  wilcox_test(bcnva ~ side_glau)%>%
+ adjust_pvalue(method="fdr")
+
+boxplot_bcdva <- create_boxplot(data,'side_glau','Сторона операции и наличие глаукомы', "bcdva", wilcox_test_bcdva)
+boxplot_bcnva <- create_boxplot(data,'side_glau','Сторона операции и наличие глаукомы', "bcnva", wilcox_test_bcnva)
+
+plot<-ggarrange(boxplot_bcdva, boxplot_bcnva, ncol = 2, nrow = 1, common.legend = TRUE, legend="bottom", heights = c(3, 3))
+annotate_figure(plot, top = text_grob("Остроты зрения по сторонам операции и наличию глаукомы, MWU тест", face = "bold", size = 12))
+```
+## Построение DAG
+
+<div style="height:20px;"></div>
+Сделаем DAG для наших задач после EDA. Нам доступны переменные: возраст на фоллоу-ап, сторона операции, остроты зрения, наличие глаукомы и стратегия лечения. 
+- Для задания 1 мы не можем использовать глаукому и мы проверяем связь стратегии и острот зрения с поправками на ковариаты. 
+- Для задания 2 мы проверяем связь глаукомы с остротой зрения с поправками на ковариаты. 
+- Для задании 3 мы проверяем, как связана частота развития глаукомы со стратегиями лечения с поправками на ковариаты. 
+<div style="height:20px;"></div>
+```{r dag1}
+
+dag <- dagitty('dag {
+"Возраст на фоллоу-ап" [selected,pos="-1.236,0.103"]
+"Острота зрения вблизи" [outcome,pos="0.361,-0.712"]
+"Острота зрения вдали" [outcome,pos="0.267,-0.075"]
+"Сторона операции" [latent,pos="-1.286,-1.301"]
+"Стратегия лечения" [exposure,pos="-1.766,-0.696"]
+"Возраст на фоллоу-ап" -> "Острота зрения вблизи"
+"Возраст на фоллоу-ап" -> "Острота зрения вдали"
+"Стратегия лечения" -> "Острота зрения вблизи"
+"Стратегия лечения" -> "Острота зрения вдали"
+}
+')
+ggdag_adjustment_set(tidy_dagitty(dag), 
+               exposure = "Стратегия лечения",
+               outcome = "Острота зрения вдали", 
+               effect = "direct", text_col='black', shadow=TRUE, node_size=5)+theme_classic()+
+  labs(title="DAG для оценки влияния стратегии на остроты зрения", x="", y="") 
+```
+<div style="height:20px;"></div>
+ - **Задание.** В задании 1 нашим исходом являются остроты зрения, а воздействием - стратегия лечения. 
+1. **Возраст.** С возрастом зрение ухудшается. Возраст на фоллоу ап не может быть причиной выбора стратегии, поэтому это не конфаундер. Благодаря EDA мы знаем, что в группах лечения возраст отличается. Скорее всего, различия в возрасте не обусловлены выбором стратегии. Стратегия была разной в разные года, но набор шел на протяжении 20 лет и мы не знаем даты фоллоу-ап, а возраст этого не отражает. Для афакии требуется время и 2 операции, но возраст выше в группе артефакии. Поэтому скорее всего это байас выборки. Таким образом, возраст на фоллоу ап это также не медиатор, и мы учтем данный признак, так как наше исследование ретроспективное и мы должны учесть байас выборки. Так как с возрастом при разных стратегиях лечения зрение может улучшаться благодаря лучшему развитию глаза, или ухудшаться, если, наоборот, глаз не развился анатомически правильно, имеет смысл добавить взаимодейсвтие возраста и стратегии. 
+2. **Сторона операции** Сторона операции не связана с выбором операции и анатомическим развитием глаза, поскольку по крайней мере глаза у человека биллатерально симметричны, т.е. сторона лечения - не конфаундер, не коллайдер и не медиатор. Мы можем ее не учитывать, но попробуем, чтобы все-таки проверить нашу гипотезу, ведь это точно не коллайдер и не медиатор. Сравним модели с и без этого фактора. Если он действительно никак не влияет на модель, его имеет смысл исключить, чтобы не добавлять шум в модель. 
+3. **Остроты зрения.** Острота зрения вблизи и вдали - это два разных аспекта зрительной функции и они являются нашими исходами, они обе зависят от общего здоровья глаза, могут быть одновременно затронуты общими внешними факторами или офтальмологическими состояниями, поэтому между ними нет каузальной связи. И конечно острота зрения оцениваемая много позже операций не является причиной для выбора стратегии. Поэтому было бы ошибкой добавлять их в модели друг для друга. 
+ - **Вывод.** Таким образом, в модели для задания 1 для острот зрения будем делать поправку на возраст и сторону операции.
+<div style="height:20px;"></div>
+```{r dag2_1}
+
+dag <- dagitty('dag {
+"Возраст на фоллоу-ап" [selected,pos="-1.354,0.410"]
+"Наличие глаукомы" [exposure,pos="-1.785,-0.301"]
+"Острота зрения вблизи" [outcome,pos="0.361,-0.712"]
+"Острота зрения вдали" [outcome,pos="0.267,-0.075"]
+"Сторона операции" [latent,pos="-1.211,-1.011"]
+"Стратегия лечения" [adjusted,pos="-0.113,0.385"]
+"Возраст на фоллоу-ап" -> "Наличие глаукомы"
+"Возраст на фоллоу-ап" -> "Острота зрения вблизи"
+"Возраст на фоллоу-ап" -> "Острота зрения вдали"
+"Наличие глаукомы" -> "Острота зрения вблизи"
+"Наличие глаукомы" -> "Острота зрения вдали"
+"Стратегия лечения" -> "Наличие глаукомы"
+"Стратегия лечения" -> "Острота зрения вблизи"
+"Стратегия лечения" -> "Острота зрения вдали"
+}
+')
+ggdag_adjustment_set(tidy_dagitty(dag), 
+               exposure = "Наличие глаукомы",
+               outcome = "Острота зрения вдали", 
+               effect = "direct", text_col='black', shadow=TRUE, node_size=5)+theme_classic()+
+  labs(title="DAG для оценки влияния наличия глаукомы на остроты зрения", x="", y="") 
+```
+<div style="height:20px;"></div>
+
+ - **Задание.** Задание 2 просит оценить связь глаукомы и остроты зрения, а также просит описать эффект терапии с учетом потенциального развития глаукомы. Начнем с первого. 
+ 1. **Возраст.** Возраст является конфаундером: он влияет и на развитие глаукомы, и на остроту зрения. При чем вероятность развития глаукомы, по литературе, но не по EDA, увеличивается с возрастом, поэтому имеет смысл добавить в модель взаимодействие этих факторов. 
+ 2. **Сторона операции.** Сторона операции снова является ковариатой, которую мы можем не учитывать. Повторим анализ как для задания 1. 
+ 3. **Стратегия лечения.** Стратегия лечения может влиять на развитие глаукомы, например, можем предполагать, что удаление хрусталика с большей вероятностью может понизить внутриглазное давление, и соответственно быть причиной неразвития глаукомы. При этом стратегия также может влиять на остроту зрения, таким образом, это конфаундер. Попробую также добавить взаимодействия между возрастом и стратегией, если это привнесет статистическую информацию в модель.
+ 4. **Остроты зрения.** Мы снова не будем включать остроты зрения по тем же причинам, что в задании 1
+ - **Вывод.** Таким образом, в модели мы будем делать поправку на возраст, стратегию и сторону операции.
+<div style="height:20px;"></div>
+
+```{r dag2_2}
+
+dag <- dagitty('dag {
+"Возраст на фоллоу-ап" [selected,pos="-1.236,0.103"]
+"Глаукома, развившаяся до операции" [adjusted,pos="-0.315,0.099"]
+"Глаукома, развившаяся после операции" [pos="-0.710,-0.907"]
+"Острота зрения вблизи" [outcome,pos="-0.161,-0.615"]
+"Острота зрения вдали" [outcome,pos="-0.091,-0.179"]
+"Сторона операции" [latent,pos="-1.207,-1.131"]
+"Стратегия лечения" [exposure,pos="-1.403,-0.655"]
+"Возраст на фоллоу-ап" -> "Острота зрения вблизи"
+"Возраст на фоллоу-ап" -> "Острота зрения вдали"
+"Глаукома, развившаяся до операции" -> "Острота зрения вблизи"
+"Глаукома, развившаяся до операции" -> "Острота зрения вдали"
+"Глаукома, развившаяся до операции" -> "Стратегия лечения"
+"Глаукома, развившаяся после операции" -> "Острота зрения вблизи"
+"Стратегия лечения" -> "Глаукома, развившаяся после операции"
+"Стратегия лечения" -> "Острота зрения вблизи"
+"Стратегия лечения" -> "Острота зрения вдали"
+}
+')
+ggdag_adjustment_set(tidy_dagitty(dag), 
+               exposure = "Стратегия лечения",
+               outcome = "Острота зрения вдали", 
+               effect = "direct", text_col='black', shadow=TRUE, node_size=5)+theme_classic()+
+  labs(title="DAG для оценки влияния стратегии лечения на остроты зрения", x="", y="") 
+```
+<div style="height:20px;"></div>
+ - **Задание.** Теперь по поводу оценки эффекта от терапии с учетом потенциального развития глаукомы. 
+ 4. **Наличие глаукомы.** Очевидно, что глаукома влияет на остроту зрения. Как глаукома может влиять на выбор стратегии лечения? Во-первых, у нас нет информации о том, когда у пациентов была диагностирована глаукома, т.е. по крайней мере мы не можем исключать того, что глаукома развилась уже после операции. Помимо этого, мы можем предполагать, что опеределенная стратегия может быть причиной глаукомы и тогда она будет медиатором. Во-вторых, причиной глаукомы является повышение внутриглазного давления. Мы можем предполагать, что удаление хрусталика с большей вероятностью может понизить внутриглазное давление, и соответственно быть причиной неразвития глаукомы, по сравнению с артефакией, без учета типа имплантируемого хрусталика. Опять же, в этом случае глаукома - медиатор. Если глаукома была диагностирована до операции, возможно могла быть проведена операция с целью также уменьшить внутриглазное давление, т.е. могла быть выбрана афакия. Тогда глаукома является конфаундером. Взаимодействие между глаукомой и возрастом попробую добавить, протестировав ее, поскольку на это есть клинические основания. 
+ -  **Вывод.** Таким образом, я сделаю поправку на глаукому в дополнение к той же модели, что в задании 1, зная, что скорее мне стоит опираться на модель в задании 3 для оценки безопасности лечения, и при этом данная модель потенциально может исказить оценку из задания 1, т.к. глаукома может быть медиатором, а не конфаундером.
+ <div style="height:20px;"></div>
+```{r dag3}
+
+dag <- dagitty('dag {
+"Возраст на фоллоу-ап" [selected,pos="-0.850,-0.002"]
+"Наличие глаукомы" [outcome,pos="0.068,-0.503"]
+"Острота зрения вблизи" [adjusted,pos="-0.938,-1.027"]
+"Острота зрения вдали" [adjusted,pos="-0.459,-1.174"]
+"Сторона операции" [latent,pos="-0.205,-0.164"]
+"Стратегия лечения" [exposure,pos="-1.311,-0.431"]
+"Возраст на фоллоу-ап" -> "Наличие глаукомы"
+"Возраст на фоллоу-ап" -> "Острота зрения вблизи"
+"Возраст на фоллоу-ап" -> "Острота зрения вдали"
+"Наличие глаукомы" -> "Острота зрения вблизи"
+"Наличие глаукомы" -> "Острота зрения вдали"
+"Стратегия лечения" -> "Наличие глаукомы"
+"Стратегия лечения" -> "Острота зрения вблизи"
+"Стратегия лечения" -> "Острота зрения вдали"
+}
+')
+ggdag_adjustment_set(tidy_dagitty(dag), 
+               exposure = "Стратегия лечения",
+               outcome = "Наличие глаукомы", 
+               effect = "direct", text_col='black', shadow=TRUE, node_size=5)+theme_classic()+
+  labs(title="DAG для оценки влияния наличия глаукомы на стратегию лечения", x="", y="") 
+```
+<div style="height:20px;"></div>
+
+ - **Задание.** В задании 3 нам нужно оценить связь развития глаукомы и стратегии лечения. Таким образом, мы будем предсказывать вероятность наличия глаукомы по стратегии лечения. 
+ 1. **Возраст.** Возраст на фоллоу-ап влияет на развитие глаукомы, но непонятно, как он влияет на выбор стратегии лечения. Однако как и в задании 1 и в задании 2, зная байас между группами, в нашем сеттинге мы должны сделать поправку на возраст. Также мы знаем, что с возрастом риск развития глаукомы растет, судя по EDA и судя по тому, что, возможно, разные стратегии могут влиять по-разному на развитие глаукомы, поскольку потенциально могут влиять на внутриглазное давление, можем предположить, что в группах с разным возрастом и разной стратегией лечения риск вероятность развития глаукомы может повышаться и понижаться. Таким образом, имеет смысл добавить взаимодействие между возрастом и стратегией лечения.
+ 2. **Сторона лечения** Сторона лечения снова не влияет на исследуемые переменные, но снова учтем ее, поскольку она является ковариатой, которая может вносить байас между группами, но не является медиатором и коллайдером и не является "виновником" мультиколлинеарности. 
+ 3. **Остроты зрения. ** А вот остроты зрения учитывать мы не можем, т.к. это коллайдеры. Они яляются результатом и глаукомы, и стратегии лечения. 
+ -  **Вывод.** Таким образом, делаем поправку на возраст и сторону.
+
+
+Таким образом, по результатам EDA и по нашим знаниям домена, мы сделали обоснованные предположения о причинно-следственных взаимосвязях между переменными и на основе этого будем строиить следующие модели: 
+- Для задания 1: bcdva/bcnva ~ strat*Age+side
+- Для задания 2:
+  - bcdva/bcnva ~ glau*Age+strat+side
+  - bcdva/bcnva ~ strat*Age+side+glau
+- Для задании 3: glau ~ strat*Age+side
+Приступим к выполнению заданий.
+<div style="height:20px;"></div>
+```{r data1, include=FALSE}
+df <- data %>% select(-glau, -X, -id)
+```
+
+<div style="height:20px;"></div>
+Построим унивариантные модели для предсказания острот зрения по стратегии.
+<div style="height:20px;"></div>
+# Задание 1.
+## Острота зрения вдали.
+### Оценка эффекта стратегии без коррекции на ковариаты.
+
+```{r crude_bcdva_diagnostics, fig.cap = "Для унивариантной модели наблюдаем незначительное отклонение от предпосылок нормальности и гомоскедастичности распределения остатков при предсказании остроты зрения вдали, при этом явных признаков кластеризации остатков не обнаружено. Проведем коррекцию на гетероскедастичность. Возьму улучшенную робастную оценку Уайта, с поправками на количество наблюдений и на влияение отдельных наблюдений. "}
+model_raw <- lm(bcdva ~ strat, data=df)
+autoplot(model_raw)+theme_classic()
+```
+
+```{r crude_bcdva_log_diagnostics2, fig.cap = "Для унивариантной модели, предсказывающей лог-шкалированную остроту зрения вдали отклонения от нормальности и гомоскедастичности не наблюдается."}
+model_log <- lm(bcdva_log  ~ strat, data=df)
+autoplot(model_log)+theme_classic()
+```
+
+
+
+```{r modelsummary_crude5, fig.cap = ""}
+library(lmtest)
+library(sandwich)
+model_raw_corr <- coeftest(model_raw, vcov = vcovHC(model_raw, type = "HC2"))
+modelsummary(list("Острота вблизи"=model_raw,"Острота вблизи с коррекцией"= model_raw_corr, "Острота вблизи, log"=model_log), statistic = c("conf.int", "p.value"))
+
+
+coef_ <- exp(coef(model_log)) - err
+coef_value <- coef_['stratArtephakia']
+
+exp_confint_lower <- exp(confint(model_log)['stratArtephakia', 1]) - err
+exp_confint_upper <- exp(confint(model_log)['stratArtephakia', 2]) - err
+
+print(paste0('Значение beta для модели после преобразования: ', round(coef_value,2), 
+                 ' , 95% ДИ: [', round(exp_confint_lower,2), ', ', round(exp_confint_upper,2), ']'))
+```
+<div style="height:20px;"></div>
+Модель log и модели без преобразования предсказывают разные переменные, поэтому их некорректно сравнивать по метрикам, таким как инфорсмационные  критерии AIC и BIC, ошибке, которая зависит от значений переменной, а также log-likelihood. Статистика F и скорректированный R-квадрат, которые отражают долю вариабельности зависимой переменной, объясненную моделью, выше для модели с лог-преобразованием. Это отлично, что модель после коррекции, предсказывающая непреобразованную переменную, и модель предсказывающая преобразованную переменную имеют одно направление для коэффициентов (положительное для группы Артефакии), это показывает согласованность результатов.
+<div style="height:20px;"></div>
+<div style="height:20px;"></div>
+**Интерпретация кооэффициентов.**
+В группе со стратегией лечения Артефакия по сравнению со стратегией Афакия острота зрения вдали выше в среднем на 0.077 [0.055, 0.179, 95% ДИ]. Результат для моделирования преобразованной переменной показывает, что в группе Артефакии острота зрения выше в 2.32 раза [0.9, 6.01, 95% ДИ]. Отметим, что разные подходы к моделированию согласованны в направлении: оба они демонстрируют, что для стратегии Артефакия показано  значимое положительное влияние на зависимую переменную.
+<div style="height:20px;"></div>
+
+### Оценка эффекта стратегии с коррекцией на ковариаты.
+
+Сначала давайте убедимся, что строна лечения не является шумом. Сделаем это с помощью anova, протестируем нулевую и унивариантную модели, а также модели с поправкой на другие ковариаты с и без стороны лечения. 
+<div style="height:20px;"></div>
+
+
+```{r adjusted_bcdva_side}
+model_zero <- lm(bcdva ~ 1, data=df)
+model_side <- lm(bcdva ~ side, data=df)
+result1 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- lm(bcdva_log ~ 1, data=df)
+model_side <- lm(bcdva_log ~ side, data=df)
+result2 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- lm(bcdva ~ strat*age_flwp, data=df)
+model_side <- lm(bcdva ~ strat*age_flwp+side, data=df)
+result3 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- lm(bcdva_log ~ strat*age_flwp, data=df)
+model_side <- lm(bcdva_log ~ strat*age_flwp+side, data=df)
+result4 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- lm(bcdva ~ strat+age_flwp, data=df)
+model_side <- lm(bcdva ~ strat+age_flwp+side, data=df)
+result5 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- lm(bcdva_log ~ strat+age_flwp, data=df)
+model_side <- lm(bcdva_log ~ strat+age_flwp+side, data=df)
+result6 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+result <- list("Нулевая модель"= result1, "Нулевая модель для лог-переменной"= result2,
+               "Возраст*Стратегия"= result3,"Возраст*Стратегия для лог-переменной"= result4,
+               "Возраст+Стратегия"= result5,"Возраст+Стратегия для лог-переменной"= result6)
+significant_results <- names(which(unlist(result) < 0.1))
+
+if (length(significant_results) == 0) {
+    print("Добавление переменной 'side' не было значимым на уровне значимости 0.1 для всех моделей.")
+} else {
+    print(paste("Добавление переменной 'side' было значимым на уровне значимости 0.1 для модели(ей):", 
+                paste(significant_results, collapse = ", ")))
+}
+```
+<div style="height:20px;"></div>
+Можем заключить, что при отсутствии оснований исходя из анализа причинно-следственных связей и поскольку добавление этой переменной в модель не показывает улучшение модели ни в одном сеттинге, мы можем не добавлять этот предиктор для оценки связи стратегии лечения с остротой зрения вдали.
+
+Сделаем то же для переменной взаимодействия.
+<div style="height:20px;"></div>
+
+
+```{r adjusted_bcdva_interac}
+model_zero <- lm(bcdva ~ strat+age_flwp, data=df)
+model_side <- lm(bcdva ~ strat*age_flwp, data=df)
+result1 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- lm(bcdva_log ~ strat+age_flwp, data=df)
+model_side <- lm(bcdva_log ~ strat*age_flwp, data=df)
+result2 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+result <- list("Модель для переменной"= result1, "Модель для лог-переменной"= result2)
+significant_results <- names(which(unlist(result) < 0.1))
+
+if (length(significant_results) == 0) {
+    print("Добавление переменной взаимодействия не было значимым на уровне значимости 0.1 для всех моделей.")
+} else {
+    print(paste("Добавление переменной взаимодействия было значимым на уровне значимости 0.1 для модели(ей):", 
+                paste(significant_results, collapse = ", ")))
+}
+```
+<div style="height:20px;"></div>
+Мы хотели учесть то, что, возможно для разных стратегий лечения острота зрения по-разному меняется с возрастом. Но эта гипотеза на наших данных не подтвердилась. Мы не будем брать переменную взаимодействия в анализ.
+
+Теперь для итоговой модели: bcnva ~ age_flwp+strat проведем диагностику.
+<div style="height:20px;"></div>
+
+
+```{r adjusted_bcdva_diagnostics, fig.cap = "Для модели с поправкой на ковариаты, предсказывающей остроту зрения вдали, как и в унивариантной модели видим небольшие отклонения от нормальности и гомоскедастичности. Введем ту же коррекцию. "}
+model_raw <- lm(bcdva ~ strat+age_flwp, data=df)
+autoplot(model_raw)+theme_classic()
+```
+
+```{r adj_bcdva_log_diagnostics, fig.cap = "Для модели с поправкой на ковариаты, предсказывающей лог-шкалированную остроту зрения вдали отклонения от нормальности и гомоскедастичности также не наблюдается." }
+model_log <- lm(bcdva_log  ~ strat+age_flwp, data=df)
+autoplot(model_log)+theme_classic()
+```
+
+
+```{r modelsummary_adj, fig.cap = ""}
+library(lmtest)
+library(sandwich)
+model_raw_corr <- coeftest(model_raw, vcov = vcovHC(model_raw, type = "HC2"))
+modelsummary(list("Острота вблизи"=model_raw,"Острота вблизи с коррекцией"= model_raw_corr, "Острота вблизи, log"=model_log), statistic = c("conf.int", "p.value"))
+
+
+coef_ <- exp(coef(model_log)) - err
+coef_value <- coef_['stratArtephakia']
+
+exp_confint_lower <- exp(confint(model_log)['stratArtephakia', 1]) - err
+exp_confint_upper <- exp(confint(model_log)['stratArtephakia', 2]) - err
+
+print(paste0('Значение beta для модели после преобразования: ', round(coef_value,2), 
+                 ' , 95% ДИ: [', round(exp_confint_lower,2), ', ', round(exp_confint_upper,2), ']'))
+```
+<div style="height:20px;"></div>
+
+Модель после коррекции, предсказывающая непреобразованную переменную, и модель предсказывающая преобразованную переменную после поправок на ковариаты также имеют одно направление для коэффициентов (положительное для группы Артефакии), это показывает согласованность результатов.
+<div style="height:20px;"></div>
+
+```{r, fig.cap = "Видим, что нижний ДИ для модели с коррекцией и модели, предсказывающая преобразованную переменную, не пересекает 0. ", fig.width=15, fig.height=7}
+
+p0 <- modelplot(model_raw, coef_omit = 'Interc' )+theme_classic()+ 
+     geom_vline(xintercept = 0, linetype="dashed", color = "red")+ labs(title="Без преобразования,\nс коррекцией", x="Коэффициенты, ДИ 95%", y="Предикторы")
+
+p <- modelplot(model_raw_corr, coef_omit = 'Interc' )+theme_classic() + labs(title="Без преобразования\nи коррекции", x="Коэффициенты, ДИ 95%", y="")+ 
+     geom_vline(xintercept = 0, linetype="dashed", color = "red")
+
+
+p1 <- modelplot(model_log, coef_omit = 'Interc' , exponentiate = TRUE)+theme_classic()+ 
+     geom_vline(xintercept = 0, linetype="dashed", color = "red")+ labs(title="Лог-преобразование", x="exp(Коэффициенты), ДИ 95%", y="")+ 
+     geom_vline(xintercept = 0, linetype="dashed", color = "red")+geom_label(data=df, aes(x = -1, y=1), label = "Линия отражает\nBeta = 0", vjust = 1.5, color="red", hjust=-0.02)
+
+plot<-ggarrange(p0,p, p1, ncol = 3, nrow = 1,  legend="bottom", heights = c(3, 3))+theme(plot.title = element_text(size = 5))
+annotate_figure(plot, top = text_grob("Предсказание остроты зрения вдали", face = "bold", size = 12))
+```
+
+<div style="height:20px;"></div>
+**Интерпретация кооэффициентов.**
+В группе со стратегией лечения Артефакия по сравнению со стратегией Афакия острота зрения вдали выше в среднем на 0.102	[0.005, 0.198, 95% ДИ] при прочих равных условиях. Результат для моделирования преобразованной переменной показывает, что в группе Артефакии острота зрения выше в 1.208 [0.229, 2.187, 95% ДИ] раз при прочих равных условиях. В обоих случаях нижние границы ДИ не пересекают границу 0, т.е. полностью определены в положительной области. Разные подходы к моделированию снова согласованны в направлении: оба они демонстрируют, что для стратегии Артефакия показано  значимое положительное влияние на зависимую переменную при прочих равных условиях.
+<div style="height:20px;"></div>
+## Острота зрения вблизи.
+### Оценка эффекта стратегии без коррекции на ковариаты.
+
+```{r crude_bcnva_diagnostics2, fig.cap = "Для унивариантной модели наблюдаем очень незначительное отклонение от предпосылок нормальности и гомоскедастичности распределения остатков при предсказании остроты зрения вблизи, при этом явных признаков кластеризации остатков не обнаружено. Проведем коррекцию на гетероскедастичность как для остроты вдали."}
+model_raw <- lm(bcnva ~ strat, data=df)
+autoplot(model_raw)+theme_classic()
+```
+
+
+```{r modelsummary_crude_2, fig.cap = "В данном случае бинаризация переменной не сделала модель лучше, судя по F-статистике. для всех моделей стратегия не оказалась значимым предиктором, более того, для логистической и для линейной регрессии направление действия признака оказалось разным. Для логистической регрессии для группы артефакии показано незначимое снижение шанса иметь остроту зрения больше 0.05 для пациента в 1.2 раза (OR = 0.83 , 95% ДИ: [0.26, 2.68]). Для линейной регрессии интерпретацию дам ниже."}
+df$bcnva_cat <- ifelse(df$bcnva_cat == "Острота вблизи >0.5", 1, 0)
+model_log <- glm(bcnva_cat  ~ strat, data=df, family = 'binomial')
+model_raw_corr <- coeftest(model_raw, vcov = vcovHC(model_raw, type = "HC2"))
+modelsummary(list("Острота вблизи"=model_raw,"Острота вблизи с коррекцией"= model_raw_corr, "Острота вблизи, log"=model_log), statistic = c("conf.int", "p.value"))
+
+
+coef_ <- exp(coef(model_log))
+coef_value <- coef_['stratArtephakia']
+
+exp_confint_lower <- exp(confint(model_log)['stratArtephakia', 1])
+exp_confint_upper <- exp(confint(model_log)['stratArtephakia', 2])
+
+if (coef_value < 1) {
+    print(paste0('Значение OR для модели после преобразования: ', round(coef_value, 2), 
+                 ' , 95% ДИ: [', round(exp_confint_lower, 2), ', ', round(exp_confint_upper, 2), 
+                 '], уменьшение в ', round(1 / coef_value, 2), ' раз.'))
+} else {
+    print(paste0('Значение OR для модели после преобразования: ', round(coef_value, 2), 
+                 ' , 95% ДИ: [', round(exp_confint_lower, 2), ', ', round(exp_confint_upper, 2), ']'))
+}
+  
+```
+
+<div style="height:20px;"></div>
+**Интерпретация кооэффициентов.**
+В группе со стратегией лечения Артефакия по сравнению со стратегией Афакия острота зрения вблизи выше в среднем на 0.055 [−0.082, 0.191, 95% ДИ]. Нижняя граница ДИ находится в отрицательной области значений, т.е. улучшение не является значимым.
+
+<div style="height:20px;"></div>
+
+### Оценка эффекта стратегии с коррекцией на ковариаты.
+
+Сначала снова убедимся, что строна лечения не является шумом. Сделаем это с помощью anova, протестируем нулевую и унивариантную модели, а также модели с поправкой на другие ковариаты с и без стороны лечения. 
+<div style="height:20px;"></div>
+
+
+```{r adjusted_bcnva_side}
+model_zero <- lm(bcnva ~ 1, data=df)
+model_side <- lm(bcnva ~ side, data=df)
+result1 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- glm(bcnva_cat ~ 1, data=df, family = 'binomial')
+model_side <- glm(bcnva_cat ~ side, data=df, family = 'binomial')
+result2 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- lm(bcnva ~ strat*age_flwp, data=df)
+model_side <- lm(bcnva ~ strat*age_flwp+side, data=df)
+result3 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- glm(bcnva_cat ~ strat*age_flwp, data=df, family = 'binomial')
+model_side <- glm(bcnva_cat ~ strat*age_flwp+side, data=df, family = 'binomial')
+result4 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- lm(bcnva ~ strat+age_flwp, data=df)
+model_side <- lm(bcnva ~ strat+age_flwp+side, data=df)
+result5 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- glm(bcnva_cat ~ strat+age_flwp, data=df, family = 'binomial')
+model_side <- glm(bcnva_cat ~ strat+age_flwp+side, data=df, family = 'binomial')
+result6 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+result <- list("Нулевая модель"= result1, "Нулевая модель для логит-переменной"= result2,
+               "Возраст*Стратегия"= result3,"Возраст*Стратегия для логит-переменной"= result4,
+               "Возраст+Стратегия"= result5,"Возраст+Стратегия для логит-переменной"= result6)
+significant_results <- names(which(unlist(result) < 0.1))
+
+if (length(significant_results) == 0) {
+    print("Добавление переменной 'side' не было значимым на уровне значимости 0.1 для всех моделей.")
+} else {
+    print(paste("Добавление переменной 'side' было значимым на уровне значимости 0.1 для модели(ей):", 
+                paste(significant_results, collapse = ", ")))
+}
+```
+<div style="height:20px;"></div>
+Можем заключить, что, как и в случае с остротой зрения вдали, при отсутствии оснований исходя из анализа причинно-следственных связей и поскольку добавление этой переменной в модель не показывает улучшение модели ни в одном сеттинге, мы можем не добавлять этот предиктор для оценки связи стратегии лечения с остротой зрения вдали.
+
+Сделаем то же для переменной взаимодействия.
+<div style="height:20px;"></div>
+
+
+```{r adjusted_bcnva_interac}
+model_zero <- lm(bcnva ~ strat+age_flwp, data=df, family = 'binomial')
+model_side <- lm(bcnva ~ strat*age_flwp, data=data, family = 'binomial')
+result1 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- glm(bcnva_cat ~ strat+age_flwp, data=df, family = 'binomial')
+model_side <- glm(bcnva_cat ~ strat*age_flwp, data=df, family = 'binomial')
+result2 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+result <- list("Модель для переменной"= result1, "Модель для логит-переменной"= result2)
+significant_results <- names(which(unlist(result) < 0.1))
+
+if (length(significant_results) == 0) {
+    print("Добавление переменной взаимодействия не было значимым на уровне значимости 0.1 для всех моделей.")
+} else {
+    print(paste("Добавление переменной взаимодействия было значимым на уровне значимости 0.1 для модели(ей):", 
+                paste(significant_results, collapse = ", ")))
+}
+```
+<div style="height:20px;"></div>
+Мы хотели учесть то, что, возможно для разных стратегий лечения острота зрения по-разному меняется с возрастом. Эта гипотеза подтвердилась для лучшей модели, как выяснили в унивариантном анализе - простом моделировании признака. Помним из EDA, что зависимость между возрастом и остротой зрения вблизи действительно была разной для стратегий. Возможно, наше предположение верно только для оценки этой зрительной функции, но не зрения вдали.
+
+Теперь для итоговой модели: bcdva ~ age_flwp*strat проведем диагностику. Моделирование с помощью логит-функции для бинаризованной переменной не показало себя хорошо в предыдущем анализе, поэтому далее будем работать только с линейной регрессией.
+<div style="height:20px;"></div>
+
+
+```{r adjusted_bcnva_diagnostics, fig.cap = "Для модели с поправкой на ковариаты, предсказывающей остроту зрения вблизи, как и в унивариантной модели видим небольшие отклонения от гомоскедастичности, но не от нормальности. Введем ту же коррекцию. "}
+model_raw <- lm(bcnva ~ strat*age_flwp, data=df)
+autoplot(model_raw)+theme_classic()
+```
+
+
+```{r modelsummary_adj_bcnva2, fig.cap = ""}
+
+model_raw_corr <- coeftest(model_raw, vcov = vcovHC(model_raw, type = "HC2"))
+modelsummary(list("Острота вблизи"=model_raw,"Острота вблизи с коррекцией"= model_raw_corr), statistic = c("conf.int", "p.value"))
+
+p_v <- linearHypothesis(model_raw, c("stratArtephakia = 0", "age_flwp = 0", "stratArtephakia:age_flwp = 0"))[2, "Pr(>F)"]
+
+if (p_v < 0.01) {
+    message <- paste("Отвергаем нулевую гипотезу об одновременном равенстве нулю коэффициентов для стратегии, возраста и их взаимодействия, p =", round(p_v,5), ". Факторы имеют статистически значимое влияние на зависимую переменную в модели.")
+    print(message)
+} else {
+    message <- "Принимаем нулевую гипотезу об одновременном равенстве коэффициентов нулю. Факторы не имеют статистически значимого эффекта на зависимую переменную в модели на уровне значимости 0.01."
+    print(message)
+}
+
+```
+<div style="height:20px;"></div>
+И признак взаимодействия стратегии и возраста, и признак стратегии имеют значимые коэффициенты на уровне значимости 0.001. Признак взаимодействия положителен, а возраст и стратегия Артефакии - отрицательны. Проверим гипотезу об одновременном равенстве переменной взаимодействия, возраста и стратегии.
+<div style="height:20px;"></div>
+
+
+```{r, fig.cap = "Все ДИ предикторов не пересекают 0. То же подтверждает тестирование статистической гипотезы.", fig.width=15, fig.height=7}
+
+p0 <- modelplot(model_raw, coef_omit = 'Interc' )+theme_classic()+ 
+     geom_vline(xintercept = 0, linetype="dashed", color = "red")+ labs(title="Без преобразования,\nи коррекции", x="Коэффициенты, ДИ 95%", y="Предикторы")
+
+p <- modelplot(model_raw_corr, coef_omit = 'Interc' )+theme_classic() + labs(title="Без преобразования\nс коррекцией", x="Коэффициенты, ДИ 95%", y="")+ 
+     geom_vline(xintercept = 0, linetype="dashed", color = "red")+geom_label(data=df, aes(x = -2, y=3), label = "Линия отражает\nBeta = 0", vjust = 1.5, color="red", hjust=-0.02)
+
+plot<-ggarrange(p0,p, ncol = 3, nrow = 1,  legend="bottom", heights = c(3, 3))+theme(plot.title = element_text(size = 5))
+annotate_figure(plot, top = text_grob("Предсказание остроты зрения вдали", face = "bold", size = 12))
+```
+```{r, include=FALSE}
+detach("package:dagitty", unload = TRUE)
+
+library(boot)
+```
+
+
+```{r effect_stim_bcnva}
+beta1 <- coef(model_raw_corr)["stratArtephakia"]
+beta2 <- coef(model_raw_corr)["stratArtephakia:age_flwp"]
+mean_age <- mean(df$age_flwp)
+
+effect_stim <- beta1+mean_age*beta2
+print(paste("Эффект артефакии при среднем возрасте ", round(mean_age,2), " равен ", round(effect_stim,3)))
+
+bootstrap_function <- function(data, indices) {
+  model_boot <- lm(formula = "bcnva ~ strat*age_flwp", data = data[indices, ])
+  model_boot <- coeftest(model_boot, vcov = vcovHC(model_boot, type = "HC2"))
+  coef1 <- coef(model_boot)["stratArtephakia"]
+  coef2 <- coef(model_boot)["stratArtephakia:age_flwp"]
+  return(coef1 + mean_age * coef2)
+}
+set.seed(42)
+results_boot <- boot(data = model_raw$model, statistic = bootstrap_function, R = 1000)
+
+boot_ci <- boot.ci(results_boot, type = "perc", conf = 0.95)$percent[4:5]
+
+print(paste("95% ДИ для эффекта: [", round(boot_ci[1],4), ", ", round(boot_ci[2], 4), "]", sep = ""))
+
+```
+
+<div style="height:20px;"></div>
+**Интерпретация кооэффициентов.**
+В группе со стратегией лечения Артефакия по сравнению со стратегией Афакия острота зрения вблизи выше в среднем на 0.1153[0.0148, 0.2398, 95% ДИ] при прочих равных условиях при среднем возрасте 11,6 лет. При изменении возраста на 1 год острота зрения вблизи в группе артефакии увеличивается на 0.093[0.053, 0.132, 95% ДИ]  при прочих равных условиях. 
+<div style="height:20px;"></div>
+
+# Задание 2. 
+
+```{r, include=FALSE}
+df <- data %>% select(-id, -X)
+```
+## Острота зрения вдали
+### Глаукома и острота зрения
+#### Без коррекции
+
+```{r crude_bcdva_diagnostics3, fig.cap = "Для унивариантной модели наблюдаем незначительное отклонение от предпосылок нормальности и гомоскедастичности распределения остатков при предсказании остроты зрения вдали, при этом явных признаков кластеризации остатков не обнаружено. Проведем коррекцию на гетероскедастичность."}
+model_raw <- lm(bcdva ~ glau, data=df)
+autoplot(model_raw)+theme_classic()
+```
+
+```{r crude_bcdva_log_diagnostics, fig.cap = "Для унивариантной модели, предсказывающей лог-шкалированную остроту зрения вдали отклонения от нормальности и гомоскедастичности не наблюдается."}
+model_log <- lm(bcdva_log  ~ glau, data=df)
+autoplot(model_log)+theme_classic()
+```
+
+
+
+```{r modelsummary_crude3, fig.cap = ""}
+model_raw_corr <- coeftest(model_raw, vcov = vcovHC(model_raw, type = "HC2"))
+modelsummary(list("Острота вблизи"=model_raw,"Острота вблизи с коррекцией"= model_raw_corr, "Острота вблизи, log"=model_log), statistic = c("conf.int", "p.value"))
+
+
+coef_ <- exp(coef(model_log)) - err
+coef_value <- coef_['glauYes']
+
+exp_confint_lower <- exp(confint(model_log)['glauYes', 1]) - err
+exp_confint_upper <- exp(confint(model_log)['glauYes', 2]) - err
+
+print(paste0('Значение beta для модели после преобразования: ', round(coef_value,2), 
+                 ' , 95% ДИ: [', round(exp_confint_lower,2), ', ', round(exp_confint_upper,2), ']'))
+
+if (coef_value < 1) {
+    print(paste0('Уменьшение в ', round(1 / coef_value, 2), ' раз.'))
+} 
+```
+<div style="height:20px;"></div>
+
+Статистика F и скорректированный R-квадрат, которые отражают долю вариабельности зависимой переменной, объясненную моделью, значительно выше для модели с лог-преобразованием, 3.1 vs 0.54 и 0.05 vs 0.01 соответсвенно. Это отлично, что модель после коррекции, предсказывающая непреобразованную переменную, и модель предсказывающая преобразованную переменную имеют одно направление для коэффициентов (отрицательные для группы с глаукомой), это показывает согласованность результатов.
+
+<div style="height:20px;"></div>
+
+```{r, fig.cap = "Видим, что нижний ДИ для модели с коррекцией и модели, предсказывающая преобразованную переменную, не пересекает 0. ", fig.width=15, fig.height=7}
+model_raw_corr <- coeftest(model_raw, vcov = vcovHC(model_raw, type = "HC2"))
+p0 <- modelplot(model_raw, coef_omit = 'Interc' )+theme_classic()+ 
+     geom_vline(xintercept = 0, linetype="dashed", color = "red")+ labs(title="Без преобразования,\nс коррекцией", x="Коэффициенты, ДИ 95%", y="Предикторы")
+
+p <- modelplot(model_raw_corr, coef_omit = 'Interc' )+theme_classic() + labs(title="Без преобразования\nи коррекции", x="Коэффициенты, ДИ 95%", y="")+ 
+     geom_vline(xintercept = 0, linetype="dashed", color = "red")+geom_label(data=df, aes(x = -1, y=2), label = "Линия отражает\nBeta = 0", vjust = 1.5, color="red", hjust=-0.02)
+
+
+p1 <- modelplot(model_log, coef_omit = 'Interc' , exponentiate = TRUE)+theme_classic()+ 
+     geom_vline(xintercept = 1, linetype="dashed", color = "blue")+ labs(title="Лог-преобразование", x="exp(Коэффициенты), ДИ 95%", y="")+geom_label(data=df, aes(x = -1, y=1), label = "Линия отражает\nexp(Beta) = 1", vjust = 1.5, color="blue", hjust=-0.02)
+
+plot<-ggarrange(p0,p, p1, ncol = 3, nrow = 1,  legend="bottom", heights = c(3, 3))+theme(plot.title = element_text(size = 5))
+annotate_figure(plot, top = text_grob("Предсказание остроты зрения вдали", face = "bold", size = 12))
+```
+
+<div style="height:20px;"></div>
+**Интерпретация кооэффициентов.**
+В группе с наличием глаукомы по сравнению с группой без глаукомы острота зрения вдали незначимо выше в среднем на 0.036 [−0.135, 0.063, 95% ДИ]. Результат для моделирования преобразованной переменной показывает, что в группе с наличием глаукомы острота зрения ниже в 2.31 раза (Коэффициент 0.43 [0.17, 1.12, 95% ДИ]), и хотя верхний ДИ выше 1, эта оценка значима на уровне 0.1. Отметим, что разные подходы к моделированию согласованны в направлении: оба они демонстрируют, что для наличия глаукомы показано  значимое отрицательное влияние на зависимую переменную.
+
+
+#### С поправкой на ковариаты
+Сначала снова убедимся, что строна лечения не является шумом для данной модели. Сделаем это с помощью anova, протестируем нулевую и унивариантную модели, а также модели с поправкой на другие ковариаты с и без стороны лечения. 
+<div style="height:20px;"></div>
+```{r adjusted_bcdva_side2}
+model_zero <- lm(bcdva ~ 1, data=df)
+model_side <- lm(bcdva ~ side, data=df)
+result1 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- lm(bcdva ~ strat+glau+age_flwp, data=df)
+model_side <- lm(bcdva ~ strat+glau+age_flwp+side, data=df)
+result2 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- lm(bcdva ~ strat+glau*age_flwp, data=df)
+model_side <- lm(bcdva ~ strat+glau*age_flwp+side, data=df)
+result3 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- lm(bcdva_log ~ 1, data=df)
+model_side <- lm(bcdva_log ~ side, data=df)
+result4 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- lm(bcdva_log ~ strat+glau+age_flwp, data=df)
+model_side <- lm(bcdva_log ~ strat+glau+age_flwp+side, data=df)
+result5 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- lm(bcdva_log ~ strat+glau*age_flwp, data=df)
+model_side <- lm(bcdva_log ~ strat+glau*age_flwp+side, data=df)
+result6 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+result <- list("Нулевая модель"= result1, "Модель с поправкой на ковариаты"= result2,
+               "Модель с поправкой на ковариаты с взаимодействием"= result3, "Нулевая модель, log"= result4, "Модель с поправкой на ковариаты, log"= result5,
+               "Модель с поправкой на ковариаты с взаимодействием, log"= result6)
+significant_results <- names(which(unlist(result) < 0.1))
+
+if (length(significant_results) == 0) {
+    print("Добавление переменной 'side' не было значимым на уровне значимости 0.1 для всех моделей.")
+} else {
+    print(paste("Добавление переменной 'side' было значимым на уровне значимости 0.1 для модели(ей):", 
+                paste(significant_results, collapse = ", ")))
+}
+```
+<div style="height:20px;"></div>
+Можем заключить, что, при отсутствии оснований исходя из анализа причинно-следственных связей и поскольку добавление этой переменной в модель не показывает улучшение модели ни в одном сеттинге, мы можем не добавлять этот предиктор для оценки связи наличия глаукомы с остротой зрения вдали.
+
+Сделаем то же для переменной взаимодействия глаукомы и возраста.
+<div style="height:20px;"></div>
+
+
+```{r adjusted_bcdva_interac2}
+model_zero <- lm(bcdva ~ glau+age_flwp+strat, data=df, family = 'binomial')
+model_side <- lm(bcdva ~ glau*age_flwp+strat, data=data, family = 'binomial')
+result1 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- lm(bcdva_log ~ glau+age_flwp+strat, data=df, family = 'binomial')
+model_side <- lm(bcdva_log ~ glau*age_flwp+strat, data=data, family = 'binomial')
+result1 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+result <- list("Модель для переменной"= result1,"Модель для log-переменной"= result1)
+significant_results <- names(which(unlist(result) < 0.1))
+
+if (length(significant_results) == 0) {
+    print("Добавление переменной взаимодействия не было значимым на уровне значимости 0.1 для всех моделей.")
+} else {
+    print(paste("Добавление переменной взаимодействия было значимым на уровне значимости 0.1 для модели(ей):", 
+                paste(significant_results, collapse = ", ")))
+}
+```
+
+<div style="height:20px;"></div>
+Мы хотели учесть то, что, возможно с возрастом в группах с и без глаукомы, из-за прогрессирования последней, острота зрения будет изменятся по-разному. Эта гипотеза не подтвердилась, переменную взаимодействия можно убрать. Переменную для возраста и стратегии мы проверяли в прошлом задании.
+
+Теперь для итоговой модели: bcdva ~ age_flwp+strat+glau проведем диагностику.
+<div style="height:20px;"></div>
+
+
+```{r adjusted_bcdva_diagnostics2, fig.cap = "Для модели с поправкой на ковариаты, предсказывающей остроту зрения вдали, как и в унивариантной модели видим небольшие отклонения от гомоскедастичности и от нормальности. Введем ту же коррекцию. "}
+model_raw <- lm(bcdva ~ age_flwp+strat+glau, data=df)
+autoplot(model_raw)+theme_classic()
+```
+```{r adjusted_bcdva_log_diagnostics, fig.cap = "Для модели с поправкой на ковариаты, предсказывающей логарифмированную остроту зрения вдали, как и в унивариантной модели не видим отклонения от нормальности и гетероскедастичности."}
+model_log <- lm(bcdva_log ~ age_flwp+strat+glau, data=df)
+autoplot(model_log)+theme_classic()
+```
+
+
+```{r modelsummary_adj_bcdva, fig.cap = ""}
+
+model_raw_corr <- coeftest(model_raw, vcov = vcovHC(model_raw, type = "HC2"))
+
+
+modelsummary(list("Острота вдали"=model_raw,"Острота вдали с коррекцией"= model_raw_corr, "Острота вдали, log"=model_log), statistic = c("conf.int", "p.value"))
+
+
+coef_ <- exp(coef(model_log)) - err
+coef_value <- coef_['glauYes']
+
+exp_confint_lower <- exp(confint(model_log)['glauYes', 1]) - err
+exp_confint_upper <- exp(confint(model_log)['glauYes', 2]) - err
+
+
+print(paste0('Значение beta (геометрическое среднее) для модели после преобразования: ', round(coef_value,2), 
+                 ' , 95% ДИ: [', round(exp_confint_lower,2), ', ', round(exp_confint_upper,2), ']'))
+
+if (coef_value < 1) {
+    print(paste0('Уменьшение в ', round(1 / coef_value, 2), ' раз.'))
+} 
+```
+<div style="height:20px;"></div>
+Снова для логнормальной регрессии оценки скорректированного R-квадрат и F-статистики выше, чем для моделирования непреобразованной переменной. В скорректированной модели, предсказывающей логарифм остроты зрений вдали, показано значимое отрицательное влияние глаукомы на остроту зрения на уровне значимости 0.1. Это не показано для модели, предсказывающей непреобразованную остроту зрения, однако для нее направление для эффекта признака совпадает, что является хорошим результатом.
+<div style="height:20px;"></div>
+
+
+```{r, fig.cap = "Видим, что нижний ДИ для модели с коррекцией и модели, предсказывающая преобразованную переменную, не пересекает 0. ", fig.width=15, fig.height=7}
+model_raw_corr <- coeftest(model_raw, vcov = vcovHC(model_raw, type = "HC2"))
+p0 <- modelplot(model_raw, coef_omit = 'Interc' )+theme_classic()+ 
+     geom_vline(xintercept = 0, linetype="dashed", color = "red")+ labs(title="Без преобразования,\nс коррекцией", x="Коэффициенты, ДИ 95%", y="Предикторы")
+
+p <- modelplot(model_raw_corr, coef_omit = 'Interc' )+theme_classic() + labs(title="Без преобразования\nи коррекции", x="Коэффициенты, ДИ 95%", y="")+ 
+     geom_vline(xintercept = 0, linetype="dashed", color = "red")+geom_label(data=df, aes(x = -1, y=2), label = "Линия отражает\nBeta = 0", vjust = 1.5, color="red", hjust=-0.02)
+
+
+p1 <- modelplot(model_log, coef_omit = 'Interc' , exponentiate = TRUE)+theme_classic()+ 
+     geom_vline(xintercept = 1, linetype="dashed", color = "blue")+ labs(title="Лог-преобразование", x="exp(Коэффициенты), ДИ 95%", y="")+geom_label(data=df, aes(x = -1, y=1), label = "Линия отражает\nexp(Beta) = 1", vjust = 1.5, color="blue", hjust=-0.02)
+
+plot<-ggarrange(p0,p, p1, ncol = 3, nrow = 1,  legend="bottom", heights = c(3, 3))+theme(plot.title = element_text(size = 5))
+annotate_figure(plot, top = text_grob("Предсказание остроты зрения вдали", face = "bold", size = 12))
+```
+
+
+<div style="height:20px;"></div>
+**Интерпретация кооэффициентов.**
+В группе с глаукомой по сравнению с группой без глаукомы острота зрения вдали ниже в среднем на 0.817	[−0.137, 0.073, 95% ДИ] при прочих равных условиях. Результат для моделирования преобразованной переменной показывает, что в группе с глаукомой острота зрения ниже в 2.27 раз (Коэффициент = 0.44, [0.18, 1.1, 95% ДИ] при прочих равных условиях, значимо на уровне значимости 0.1. Разные подходы к моделированию снова согласованны в направлении: оба они демонстрируют, что для группы с глаукомой показано отрицательное влияние на зависимую переменную при прочих равных условиях.
+
+<div style="height:20px;"></div>
+
+
+### Стратегия, острота зрения и глаукома
+
+Сначала убедимся что мы не должны добавлять взаимодействие в модель. 
+<div style="height:20px;"></div>
+```{r adjusted_bcdva_side3}
+model_zero <- lm(bcdva ~ strat+glau+age_flwp, data=df)
+model_side <- lm(bcdva ~ strat*glau*age_flwp, data=df)
+result1 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- lm(bcdva_log ~ strat+glau+age_flwp, data=df)
+model_side <- lm(bcdva_log ~ strat*glau*age_flwp, data=df)
+result2 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+result <- list("Модель с тройным взаимодействием"= result1, "Модель с тройным взаимодействием, log"= result2)
+significant_results <- names(which(unlist(result) < 0.1))
+
+if (length(significant_results) == 0) {
+    print("Добавление переменной 'side' не было значимым на уровне значимости 0.1 для всех моделей.")
+} else {
+    print(paste("Добавление переменной 'side' было значимым на уровне значимости 0.1 для модели(ей):", 
+                paste(significant_results, collapse = ", ")))
+}
+```
+<div style="height:20px;"></div>
+Отлично, можем заключить, что для моделирования bcdva нам не нужны переменные взаимодействия.
+
+Наша итоговая модель : bcdva ~ age_flwp+strat+glau уже была исследована.
+<div style="height:20px;"></div>
+
+
+```{r}
+coef_ <- exp(coef(model_log)) - err
+coef_value <- coef_['stratArtephakia']
+
+exp_confint_lower <- exp(confint(model_log)['stratArtephakia', 1]) - err
+exp_confint_upper <- exp(confint(model_log)['stratArtephakia', 2]) - err
+
+
+print(paste0('Значение beta (геометрическое среднее) для модели после преобразования: ', round(coef_value,2), 
+                 ' , 95% ДИ: [', round(exp_confint_lower,2), ', ', round(exp_confint_upper,2), ']'))
+
+if (coef_value < 1) {
+    print(paste0('Уменьшение в ', round(1 / coef_value, 2), ' раз.'))
+} 
+```
+**Интерпретация кооэффициентов.**
+
+В группе со стратегией лечения Артефакия по сравнению со стратегией Афакия острота зрения вдали выше в среднем на 0.098	[0.004, 0.192, 95% ДИ] при прочих равных условиях, в том числе независимо от наличия глаукомы. Результат для моделирования преобразованной переменной показывает, что в группе Артефакии острота зрения выше в 3.08 [1.17, 8.08, 95% ДИ] раз  при прочих равных условиях, в том числе независимо от наличия глаукомы. В обоих случаях нижние границы ДИ не пересекают границу 0, и 1 соответственно, т.е. полностью определены в положительной области. Эти результаты значимы на уровне 0.05. Разные подходы к моделированию снова согласованны в направлении: оба они демонстрируют, что для стратегии Артефакия показано  значимое положительное влияние на зависимую переменную при прочих равных условиях.
+<div style="height:20px;"></div>
+
+## Острота зрения вблизи
+### Глаукома и острота зрения
+#### Без коррекции
+
+```{r crude_bcnva_diagnostics, fig.cap = "Для унивариантной модели наблюдаем очень незначительное отклонение от предпосылок нормальности при предсказании остроты зрения вблизи, при этом явных признаков кластеризации остатков и гетероскедастичности не обнаружено."}
+model_raw <- lm(bcnva ~ glau, data=df)
+autoplot(model_raw)+theme_classic()
+```
+
+
+```{r modelsummary_crude4, fig.cap = ""}
+model_log <- glm(bcnva_cat  ~ glau, data=df, family = 'binomial')
+model_raw_corr <- coeftest(model_raw, vcov = vcovHC(model_raw, type = "HC2"))
+modelsummary(list("Острота вблизи"=model_raw,"Острота вблизи с коррекцией"= model_raw_corr, "Острота вблизи, logit"=model_log), statistic = c("conf.int", "p.value"))
+
+coef_ <- exp(coef(model_log))
+coef_value <- coef_['glauYes']
+
+exp_confint_lower <- exp(confint(model_log)['glauYes', 1])
+exp_confint_upper <- exp(confint(model_log)['glauYes', 2])
+
+if (coef_value < 1) {
+    print(paste0('Значение OR для модели после преобразования: ', round(coef_value, 2), 
+                 ' , 95% ДИ: [', round(exp_confint_lower, 2), ', ', round(exp_confint_upper, 2), 
+                 '], уменьшение в ', round(1 / coef_value, 2), ' раз.'))
+} else {
+    print(paste0('Значение OR для модели после преобразования: ', round(coef_value, 2), 
+                 ' , 95% ДИ: [', round(exp_confint_lower, 2), ', ', round(exp_confint_upper, 2), ']'))
+}
+  
+```
+<div style="height:20px;"></div>
+В данном случае бинаризация переменной не сделала модель лучше, судя по F-статистике. для всех моделей стратегия не оказалась значимым предиктором, более того, для логистической и для линейной регрессии направление действия признака оказалось разным. Для логистической регрессии для группы артефакии показано незначимое снижение шанса иметь остроту зрения больше 0.05 для пациента в 1.2 раза (OR = 0.83 , 95% ДИ: [0.26, 2.68]). Для линейной регрессии интерпретацию дам ниже.
+
+**Интерпретация кооэффициентов.**
+В группе с глаукомой, по сравнению с группой без глаукомы, острота зрения вблизи выше в среднем на -0.050 [−0.189, 0.089, 95% ДИ]. Верхняя граница ДИ находится в отрицательной области значений, ухудшение незначимо. Однако результаты моделей согласуются.
+<div style="height:20px;"></div>
+
+#### С поправками на ковариаты
+
+Мы уже знаем, что нам нужно учитывать взаимодейсвтие возраста и стратегии, но попробуем также протестировать взаимодействие глаукомы, возраста, и стратегии. Категориальную переменную брать в анализ не будем, поскольку она моделируется хуже, чем просто регрессия, например, по F статистике.
+<div style="height:20px;"></div>
+
+
+```{r adjusted_bcnva_side2}
+model_zero <- lm(bcnva ~ strat*age_flwp, data=df)
+model_side <- lm(bcnva ~ strat*age_flwp+glau, data=df)
+result1 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- lm(bcnva ~ strat*age_flwp+glau, data=df)
+model_side <- lm(bcnva ~ strat*age_flwp*glau, data=df)
+result2<- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- lm(bcnva ~ strat*age_flwp+glau, data=df)
+model_side <- lm(bcnva ~ strat*age_flwp+glau+glau:age_flwp, data=df)
+result3 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+result <- list("Возраст*Стратегия+Глаукому"= result1, "Возраст*Стратегия*Глаукому"= result2, 
+               "Возраст*Глаукому+Возраст*Стратегия"= result3)
+significant_results <- names(which(unlist(result) < 0.1))
+
+if (length(significant_results) == 0) {
+    print("Добавление переменных не было значимым на уровне значимости 0.1 для всех моделей.")
+} else {
+    print(paste("Добавление переменных 'side' было значимым на уровне значимости 0.1 для модели(ей):", 
+                paste(significant_results, collapse = ", ")))
+}
+```
+<div style="height:20px;"></div>
+Можем заключить, что, как и в случае с остротой зрения вдали, гипотеза о разной остроте зрения по группам глаукомы не подтверждается. Более того, добавление глаукомы не улучшает модель. Тем не менее, добавим признак по заданию.
+
+Теперь для итоговой модели: bcnva ~ age_flwp*strat+glau проведем диагностику. Моделирование с помощью логит-функции для бинаризованной переменной не показало себя хорошо в предыдущем анализе, поэтому далее будем работать только с линейной регрессией.
+<div style="height:20px;"></div>
+
+
+```{r adjusted_bcnva_diagnostics2, fig.cap = "Для модели с поправкой на ковариаты, предсказывающей остроту зрения вблизи, как и в унивариантной модели видим небольшие отклонения от гомоскедастичности, но не от нормальности. Введем ту же коррекцию. "}
+model_raw <- lm(bcnva ~ strat*age_flwp+glau, data=df)
+autoplot(model_raw)+theme_classic()
+```
+
+
+```{r modelsummary_adj_bcnva3, fig.cap = ""}
+model_raw_baseline <- lm(bcnva~strat*age_flwp, data=df)
+model_raw_corr_baseline <- coeftest(model_raw_baseline, vcov = vcovHC(model_raw_baseline, type = "HC2"))
+model_raw_corr <- coeftest(model_raw, vcov = vcovHC(model_raw, type = "HC2"))
+modelsummary(list("Острота вблизи, бейзлайн"=model_raw_baseline, "Острота вблизи"=model_raw,"Острота вблизи с коррекцией"= model_raw_corr), statistic = c("conf.int", "p.value"))
+
+p_v <- linearHypothesis(model_raw, c("stratArtephakia = 0", "age_flwp = 0", "stratArtephakia:age_flwp = 0"))[2, "Pr(>F)"]
+
+if (p_v < 0.01) {
+    message <- paste("Отвергаем нулевую гипотезу об одновременном равенстве нулю коэффициентов для стратегии, возраста и их взаимодействия, p =", round(p_v,5), ". Факторы имеют статистически значимое влияние на зависимую переменную в модели.")
+    print(message)
+} else {
+    message <- "Принимаем нулевую гипотезу об одновременном равенстве коэффициентов нулю. Факторы не имеют статистически значимого эффекта на зависимую переменную в модели на уровне значимости 0.01."
+    print(message)
+}
+```
+<div style="height:20px;"></div>
+
+И признак взаимодействия стратегии и возраста, и признак стратегии имеют значимые коэффициенты на уровне значимости 0.001. Признак взаимодействия положителен, а возраст и стратегия Артефакии - отрицательны. Проверим гипотезу об одновременном равенстве переменной взаимодействия, возраста и стратегии.
+<div style="height:20px;"></div>
+
+```{r, fig.cap = "ДИ для возраста, стратегии и их взаимодействия также не пересекают 0. То же подтверждает тестирование статистической гипотезы.", fig.width=15, fig.height=7}
+
+p0 <- modelplot(model_raw, coef_omit = 'Interc' )+theme_classic()+ 
+     geom_vline(xintercept = 0, linetype="dashed", color = "red")+ labs(title="Без преобразования,\nи коррекции", x="Коэффициенты, ДИ 95%", y="Предикторы")
+
+p <- modelplot(model_raw_corr, coef_omit = 'Interc' )+theme_classic() + labs(title="Без преобразования\nс коррекцией", x="Коэффициенты, ДИ 95%", y="")+ 
+     geom_vline(xintercept = 0, linetype="dashed", color = "red")+geom_label(data=df, aes(x = -2, y=3), label = "Линия отражает\nBeta = 0", vjust = 1.5, color="red", hjust=-0.02)
+
+plot<-ggarrange(p0,p, ncol = 3, nrow = 1,  legend="bottom", heights = c(3, 3))+theme(plot.title = element_text(size = 5))
+annotate_figure(plot, top = text_grob("Предсказание остроты зрения вдали", face = "bold", size = 12))
+```
+
+
+```{r effect_stim_bcnva2}
+beta1 <- coef(model_raw_corr)["stratArtephakia"]
+beta2 <- coef(model_raw_corr)["stratArtephakia:age_flwp"]
+mean_age <- mean(df$age_flwp)
+
+effect_stim <- beta1+mean_age*beta2
+print(paste("Эффект артефакии при среднем возрасте ", round(mean_age,2), " равен ", round(effect_stim,3)))
+
+bootstrap_function <- function(data, indices) {
+  model_boot <- lm(formula = "bcnva ~ strat*age_flwp+glau", data = data[indices, ])
+  model_boot <- coeftest(model_boot, vcov = vcovHC(model_boot, type = "HC2"))
+  coef1 <- coef(model_boot)["stratArtephakia"]
+  coef2 <- coef(model_boot)["stratArtephakia:age_flwp"]
+  return(coef1 + mean_age * coef2)
+}
+set.seed(42)
+results_boot <- boot(data = model_raw$model, statistic = bootstrap_function, R = 1000)
+
+boot_ci <- boot.ci(results_boot, type = "perc", conf = 0.95)$percent[4:5]
+
+print(paste("95% ДИ для эффекта: [", round(boot_ci[1],4), ", ", round(boot_ci[2], 4), "]", sep = ""))
+
+```
+
+<div style="height:20px;"></div>
+**Интерпретация кооэффициентов.**
+В группе со стратегией лечения Артефакия по сравнению со стратегией Афакия острота зрения вблизи выше в среднем на 0.111[0.0048, 0.2311, 95% ДИ] при прочих равных условиях при среднем возрасте 11,6 лет. При изменении возраста на 1 год острота зрения вблизи в группе артефакии увеличивается на 0.092[0.053, 0.132, 95% ДИ] при прочих равных условиях. Можно сказать, что добавление глаукомы немного ухудшило оценку эффекта, расширив ДИ.
+<div style="height:20px;"></div>
+
+# Частота глаукомы vs стратегия
+## Без ковариат
+
+```{r glau_crude}
+df$glau <- ifelse(df$glau == "Yes", 1, 0)
+model_raw <- glm(glau~strat, data=df, family='binomial')
+modelsummary(model_raw, coef_omit = 'Interc', statistic = c("conf.int", "p.value"))
+
+
+coef_ <- exp(coef(model_raw))
+coef_value <- coef_['stratArtephakia']
+
+exp_confint_lower <- exp(confint(model_raw)['stratArtephakia', 1])
+exp_confint_upper <- exp(confint(model_raw)['stratArtephakia', 2])
+
+if (coef_value < 1) {
+    print(paste0('Значение OR для модели: ', round(coef_value, 2), 
+                 ' , 95% ДИ: [', round(exp_confint_lower, 2), ', ', round(exp_confint_upper, 2), 
+                 '], уменьшение в ', round(1 / coef_value, 2), ' раз.'))
+} else {
+    print(paste0('Значение OR для модели: ', round(coef_value, 2), 
+                 ' , 95% ДИ: [', round(exp_confint_lower, 2), ', ', round(exp_confint_upper, 2), ']'))
+}
+```
+
+<div style="height:20px;"></div>
+**Интерпретация кооэффициентов.**
+Шансы для стратегии лечения Артефакия иметь глаукому уменьшаются в 1.7 по сравнению со стратегией Афакия, при OR=0.59 , 95% ДИ: [0.21, 1.65]. Этот результат незначим.
+<div style="height:20px;"></div>
+
+## С поправкой
+
+<div style="height:20px;"></div>
+Снова начнем с оценки признака "сторона операции", по скольку с точки зрения анализа причинно-следственных связей, этот признак не влияет на изучаемые переменные, а с точки зрения EDA различия между группами по нему нет.
+<div style="height:20px;"></div>
+
+
+```{r adjusted_glau_side}
+model_zero <- glm(glau ~ 1, data=df, family = 'binomial')
+model_side <- glm(glau ~ side, data=df, family = 'binomial')
+result1 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- glm(glau ~ strat+age_flwp, data=df, family = 'binomial')
+model_side <- glm(glau ~ strat+age_flwp+side, data=df, family = 'binomial')
+result2 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+model_zero <- glm(glau ~ strat*age_flwp, data=df, family = 'binomial')
+model_side <- glm(glau ~ strat*age_flwp+side, data=df, family = 'binomial')
+result3 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+result <- list("Нулевая модель"= result1, 
+               "Возраст*Стратегия"= result3,
+               "Возраст+Стратегия"= result2)
+significant_results <- names(which(unlist(result) < 0.1))
+
+if (length(significant_results) == 0) {
+    print("Добавление переменной 'side' не было значимым на уровне значимости 0.1 для всех моделей.")
+} else {
+    print(paste("Добавление переменной 'side' было значимым на уровне значимости 0.1 для модели(ей):", 
+                paste(significant_results, collapse = ", ")))
+}
+```
+
+<div style="height:20px;"></div>
+Снова не находим добавлять "сторону операции".
+
+Сравним модель с и без взаимодействия для стратегии и возраста.
+<div style="height:20px;"></div>
+```{r adjusted_glau_inter}
+model_zero <- glm(glau ~ strat+age_flwp, data=df, family = 'binomial')
+model_side <- glm(glau ~ strat*age_flwp, data=df, family = 'binomial')
+result1 <- anova(model_zero, model_side)[2, "Pr(>F)"]
+
+significant_results <- names(which(unlist(result) < 0.1))
+
+if (length(significant_results) == 0) {
+    print("Добавление переменной взаимодействия не было значимым на уровне значимости 0.1 для всех моделей.")
+} else {
+    print(paste("Добавление переменной взаимодействия было значимым на уровне значимости 0.1 для модели(ей):", 
+                paste(significant_results, collapse = ", ")))
+}
+```
+
+
+<div style="height:20px;"></div>
+На основе результата, подтверждения с точки зрения доменных знаний и EDA не добавляем переменную взаимодействия.
+<div style="height:20px;"></div>
+
+```{r glau_adj}
+model_raw <- glm(glau~strat+age_flwp, data=df, family='binomial')
+modelsummary(model_raw, coef_omit = 'Interc', statistic = c("conf.int", "p.value"))
+
+
+coef_ <- exp(coef(model_raw))
+coef_value <- coef_['stratArtephakia']
+
+exp_confint_lower <- exp(confint(model_raw)['stratArtephakia', 1])
+exp_confint_upper <- exp(confint(model_raw)['stratArtephakia', 2])
+
+if (coef_value < 1) {
+    print(paste0('Значение OR для модели: ', round(coef_value, 2), 
+                 ' , 95% ДИ: [', round(exp_confint_lower, 2), ', ', round(exp_confint_upper, 2), 
+                 '], уменьшение в ', round(1 / coef_value, 2), ' раз.'))
+} else {
+    print(paste0('Значение OR для модели: ', round(coef_value, 2), 
+                 ' , 95% ДИ: [', round(exp_confint_lower, 2), ', ', round(exp_confint_upper, 2), ']'))
+}
+```
+
+
+```{r, fig.cap = "ДИ для возраста и стратегии пересекают OR=1. В группе с артефакией шанс иметь глаукому ниже, незначимо.", fig.width=15, fig.height=7}
+modelplot(model_raw, coef_omit = 'Interc', exponentiate = TRUE)+theme_classic() + labs(title="Предсказание наличия глаукомы", x="Коэффициенты, ДИ 95%", y="Переменные")+ 
+     geom_vline(xintercept = 1, linetype="dashed", color = "blue")+geom_label(data=df, aes(x = 0.1, y=1), label = "Линия отражает\nOR = 1", vjust = 1.5, color="blue", hjust=-0.02)
+```
+
+<div style="height:20px;"></div>
+**Интерпретация кооэффициентов.**
+Шансы для стратегии лечения Артефакия иметь глаукому уменьшаются в 1.53 раз по сравнению со стратегией Афакия (OR=0.65 , 95% ДИ: [0.22, 1.96]). Этот результат незначим.
+<div style="height:20px;"></div>
+
+# Вывод
+- Стратегия лечения Артефакия, судя по данным, превосходит Афакию по всем 3-м параметрам: остроте вблизи, вдали и частоте развития глаукомы.
